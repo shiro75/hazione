@@ -206,7 +206,7 @@ function ShopSettingsTab({ shop, companyId, companyName }: { shop: Shop | null |
     },
   });
 
-  const shopUrl = slug ? `${Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : 'https://rork.app/p/pf7qwnb82blbf7u579jv7'}/shop/${slug}` : '';
+  const shopUrl = slug ? `${Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : 'https://hazione'}/shop/${slug}` : '';
 
   const handleViewShop = useCallback(() => {
     if (!shopUrl) return;

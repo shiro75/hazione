@@ -243,7 +243,7 @@ export interface Client {
   updatedAt: string;
 }
 
-export type ProductType = 'matiere_premiere' | 'consommable' | 'produit_fini' | 'produit_revendu' | 'service';
+export type ProductType = 'matiere_premiere' | 'consommable' | 'produit_transforme' | 'produit_revendu' | 'service';
 
 export type ProductStatus = 'active' | 'inactive';
 

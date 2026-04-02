@@ -1,7 +1,7 @@
 # HaziOne — Simplifie ton business
 
 Application mobile et web de gestion commerciale complete construite avec React Native (Expo).
-Cible : petits commercants, artisans, PME en Afrique de l'Ouest et en France.
+Cible : petits commercants, artisans, PME en Afrique francophone et en France.
 
 ## Fonctionnalites principales
 
@@ -187,12 +187,11 @@ tous les anciens fichiers de migration et schemas partiels.
 ## Lancer le projet
 
 ```bash
-cd expo
+cd frontend
 bun install
-bun start
-```
+npx expo start
 
-Scanner le QR code avec Expo Go ou ouvrir dans le navigateur.
+```
 
 ## Configuration
 

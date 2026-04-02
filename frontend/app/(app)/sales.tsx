@@ -1262,11 +1262,7 @@ const renderProductGrid = () => (
                         </TouchableOpacity>
                         {isExpanded && hasRealVariants && (
                           <View style={{ borderTopWidth: 1, borderTopColor: colors.borderLight }}>
-                            {[...productVariantsList].sort((a, b) => {
-                              const labelA = Object.entries(a.attributes).map(([k, val]) => `${k}: ${val}`).join(' / ');
-                              const labelB = Object.entries(b.attributes).map(([k, val]) => `${k}: ${val}`).join(' / ');
-                              return labelA.localeCompare(labelB);
-                            }).map((v) => {
+                            {productVariantsList.map((v) => {
                               const vLabel = Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(' / ');
                               const inCart = cart.find((c) => c.variantId === v.id);
                               return (

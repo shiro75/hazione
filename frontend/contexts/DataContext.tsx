@@ -114,6 +114,8 @@ export const [DataProvider, useData] = createContextHook(() => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+
+
   // ====== QUERIES ======
 
   const queryDefaults = { retry: false, refetchOnWindowFocus: false } as const;
@@ -557,6 +559,38 @@ export const [DataProvider, useData] = createContextHook(() => {
   const getClientReminderLogs = useCallback((clientId: string): PaymentReminderLog[] => {
     return paymentReminderLogs.filter(r => r.clientId === clientId);
   }, [paymentReminderLogs]);
+
+
+  const reorderAttributeValue = useCallback((
+    attributeId: string, 
+    oldIndex: number, 
+    newIndex: number
+  ) => {
+    setProductAttributes(prev => prev.map(attr => {
+      if (attr.id !== attributeId) return attr;
+      
+      const newValues = [...attr.values];
+      const [movedValue] = newValues.splice(oldIndex, 1);
+      newValues.splice(newIndex, 0, movedValue);
+      
+      return { ...attr, values: newValues };
+    }));
+  }, []);
+
+  const updateAttributeValuesOrder = useCallback((
+    attributeId: string, 
+    newValues: string[]
+  ) => {
+    setProductAttributes(prev => prev.map(attr => {
+      if (attr.id !== attributeId) return attr;
+      return { ...attr, values: newValues };
+    }));
+    void persistProductAttributes(productAttributes.map(attr => 
+      attr.id === attributeId ? { ...attr, values: newValues } : attr
+    ));
+  }, [productAttributes, persistProductAttributes]);
+
+
 
   // ====== MODULES CONFIG ======
 
@@ -2639,6 +2673,8 @@ export const [DataProvider, useData] = createContextHook(() => {
     getProductTotalStock,
     getVariantStock,
     generateVariantSKU,
+    reorderAttributeValue,
+    updateAttributeValuesOrder,
     productStockMap,
     auditLogs,
     productAttributes,

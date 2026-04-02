@@ -432,6 +432,14 @@ const fr: Record<string, string> = {
   'stock.threshold': 'SEUIL',
   'stock.status': 'STATUT',
   'stock.actions': 'ACTIONS',
+  'stock.rawMaterial': 'Matière première',
+  'stock.rawMaterialDesc': 'Produits bruts ou semi-ouvrés utilisés pour la fabrication',
+  'stock.consumable': 'Consommable',
+  'stock.consumableDesc': 'Articles destinés à être utilisés et consommés (fournitures, emballages, etc.)',
+  'stock.transformedProduct': 'Produit transformé',
+  'stock.transformedProductDesc': 'Produits issus de la transformation des matières premières',
+  'stock.resoldProduct': 'Produit revendu',
+  'stock.resoldProductDesc': 'Articles achetés pour être revendus sans transformation',
 
   // Clients (standalone page)
   'clients.title': 'Clients',
