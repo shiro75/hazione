@@ -28,11 +28,6 @@ const PLANS = [
   { key: 'business', nameKey: 'landing.business', priceKey: 'landing.businessPrice', featuresKey: 'landing.businessFeatures', color: '#7C3AED', popular: false },
 ];
 
-const TESTIMONIALS = [
-  { nameKey: 'landing.testimonial1Name', roleKey: 'landing.testimonial1Role', textKey: 'landing.testimonial1Text' },
-  { nameKey: 'landing.testimonial2Name', roleKey: 'landing.testimonial2Role', textKey: 'landing.testimonial2Text' },
-  { nameKey: 'landing.testimonial3Name', roleKey: 'landing.testimonial3Role', textKey: 'landing.testimonial3Text' },
-];
 
 const LANGUAGE_FLAGS: { value: AppLocale; flag: string; label: string }[] = [
   { value: 'fr', flag: '🇫🇷', label: 'FR' },
@@ -127,28 +122,6 @@ export default function LandingPage() {
         </View>
       </View>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t('landing.testimonials')}</Text>
-        <View style={[styles.testimGrid, isDesktop && styles.testimGridDesktop]}>
-          {TESTIMONIALS.map((test, idx) => (
-            <View key={idx} style={styles.testimCard}>
-              <View style={styles.testimQuoteIcon}>
-                <Quote size={20} color="#2563EB" />
-              </View>
-              <Text style={styles.testimText}>{t(test.textKey)}</Text>
-              <View style={styles.testimAuthor}>
-                <View style={styles.testimAvatar}>
-                  <Text style={styles.testimAvatarText}>{t(test.nameKey).charAt(0)}</Text>
-                </View>
-                <View>
-                  <Text style={styles.testimName}>{t(test.nameKey)}</Text>
-                  <Text style={styles.testimRole}>{t(test.roleKey)}</Text>
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
 
       <View style={styles.footer}>
         <Text style={styles.footerLogo}>HaziOne</Text>
@@ -223,18 +196,6 @@ const styles = StyleSheet.create({
   planFeatureText: { fontSize: 13, color: '#475569' },
   planBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 10, alignSelf: 'stretch' as const, alignItems: 'center' as const },
   planBtnText: { color: '#FFF', fontSize: 14, fontWeight: '700' as const },
-  testimGrid: { gap: 16 },
-  testimGridDesktop: { flexDirection: 'row' as const, justifyContent: 'center' as const },
-  testimCard: {
-    backgroundColor: '#F8FAFC', borderRadius: 14, padding: 20, borderWidth: 1, borderColor: '#E2E8F0',
-  },
-  testimQuoteIcon: { marginBottom: 10 },
-  testimText: { fontSize: 14, color: '#334155', lineHeight: 20, fontStyle: 'italic' as const, marginBottom: 14 },
-  testimAuthor: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
-  testimAvatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#2563EB', alignItems: 'center' as const, justifyContent: 'center' as const },
-  testimAvatarText: { color: '#FFF', fontSize: 15, fontWeight: '700' as const },
-  testimName: { fontSize: 13, fontWeight: '700' as const, color: '#0F172A' },
-  testimRole: { fontSize: 11, color: '#64748B' },
   footer: { alignItems: 'center' as const, paddingVertical: 32, paddingHorizontal: 20, borderTopWidth: 1, borderTopColor: '#E2E8F0', marginTop: 48 },
   footerLogo: { fontSize: 18, fontWeight: '800' as const, color: '#0F172A', marginBottom: 12 },
   footerLinks: { flexDirection: 'row' as const, gap: 6, marginBottom: 8 },

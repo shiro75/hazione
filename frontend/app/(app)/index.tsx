@@ -26,7 +26,7 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, useWindowDimensions,
-  TouchableOpacity, Platform, Share, Alert,
+  TouchableOpacity, Platform, Share, Alert, LayoutAnimation,
 } from 'react-native';
 import {
   FileText, Clock, ArrowUpRight, ArrowDownRight,
@@ -143,11 +143,6 @@ function getPreviousPeriodRange(now: Date, period: PeriodFilter): { start: Date;
   return { start: new Date(y - 1, 0, 1), end: new Date(y, 0, 1) };
 }
 
-function formatCompact(v: number): string {
-  if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(v) >= 1_000) return `${(v / 1_000).toFixed(0)}k`;
-  return String(Math.round(v));
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPOSANT AVATAR CLIENT (initiales sur fond colore)
@@ -197,7 +192,7 @@ export default function DashboardScreen() {
   } = useData();
 
   const cur = company.currency || 'XOF';
-  const { pendingSalesCount, isOnline, isSyncing } = useOffline();
+  const { pendingSalesCount, isOnline: _isOnline, isSyncing } = useOffline();
 
   const now = useMemo(() => new Date(), []);
   const firstName = useMemo(() => extractFirstName(user), [user]);
@@ -215,6 +210,7 @@ export default function DashboardScreen() {
   const [period, setPeriod] = useState<PeriodFilter>('month');
   const [movementFilter, setMovementFilter] = useState<MovementFilter>('all');
   const [showMovements, setShowMovements] = useState(false);
+  const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
   const scrollRef = useRef<ScrollView>(null);
   const { simplifiedDashboard } = useRole();
 
@@ -388,8 +384,14 @@ export default function DashboardScreen() {
   /** 5 dernieres ventes toutes sources confondues */
   const recentSales = useMemo(() => {
     const allSales = [
-      ...sales.map(s => ({ id: s.id, date: s.createdAt, client: s.clientName || 'Client comptoir', amount: s.totalTTC, status: s.status as string, paymentMethod: s.paymentMethod })),
-      ...invoices.filter(i => i.status === 'paid').map(i => ({ id: i.id, date: i.issueDate, client: i.clientName, amount: i.totalTTC, status: 'paid', paymentMethod: 'transfer' as const })),
+      ...sales.map(s => ({
+        id: s.id, date: s.createdAt, client: s.clientName || 'Client comptoir', amount: s.totalTTC, status: s.status as string, paymentMethod: s.paymentMethod,
+        items: s.items, totalHT: s.totalHT, totalTVA: s.totalTVA, clientId: s.clientId,
+      })),
+      ...invoices.filter(i => i.status === 'paid').map(i => ({
+        id: i.id, date: i.issueDate, client: i.clientName, amount: i.totalTTC, status: 'paid', paymentMethod: 'transfer' as const,
+        items: i.items, totalHT: i.totalHT, totalTVA: i.totalTVA, clientId: i.clientId,
+      })),
     ];
     return allSales.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 5);
   }, [sales, invoices]);
@@ -438,12 +440,12 @@ export default function DashboardScreen() {
   }, [invoices, sales, activeSupplierInvoices, cashMovements, now]);
 
   const marginEvolution = useMemo(() => sixMonthsData.map(m => ({ label: m.label, margin: m.margin })), [sixMonthsData]);
-  const marginMax = useMemo(() => Math.max(...marginEvolution.map(m => Math.abs(m.margin)), 1), [marginEvolution]);
+  const _marginMax = useMemo(() => Math.max(...marginEvolution.map(m => Math.abs(m.margin)), 1), [marginEvolution]);
 
   /** Marge par categorie produit — pour le bar chart horizontal */
   const marginByCategory = useMemo(() => {
     const catMap = new Map<string, { revenue: number; cost: number }>();
-    const processSale = (items: { productId?: string; totalTTC: number; quantity?: number }[], isInvoice = false) => {
+    const processSale = (items: { productId?: string; totalTTC: number; quantity?: number }[], _isInvoice = false) => {
       for (const item of items) {
         const product = activeProducts.find(p => p.id === item.productId);
         const catName = product?.categoryName || 'Autres';
@@ -481,7 +483,7 @@ export default function DashboardScreen() {
 
   /** Repartition clients nouveaux vs recurrents */
   const clientRecurrence = useMemo(() => {
-    const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1).toISOString();
+    const _sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1).toISOString();
     const clientPurchaseDates: Record<string, string[]> = {};
 
     const recordClient = (clientId: string | undefined, clientName: string | undefined, date: string) => {
@@ -802,11 +804,12 @@ export default function DashboardScreen() {
     );
   };
 
-  /**
-   * Liste des 5 dernieres ventes avec avatar client, badge statut et barre de progression relative.
-   * Utilisee dans les deux modes (standard et simplifie).
-   */
-  const renderRecentSalesList = (pressable = true) => (
+  const toggleSaleExpand = useCallback((saleId: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedSaleId(prev => prev === saleId ? null : saleId);
+  }, []);
+
+  const renderRecentSalesList = (_pressable = true) => (
     recentSales.length === 0 ? (
       <View style={styles.emptyChart}>
         <FileText size={28} color={colors.textTertiary} />
@@ -818,37 +821,82 @@ export default function DashboardScreen() {
         {recentSales.map((sale, idx) => {
           const progress = recentSalesMax > 0 ? sale.amount / recentSalesMax : 0;
           const PaymentIcon = PAYMENT_ICONS[sale.paymentMethod] || CreditCard;
-          const Wrapper = pressable ? TouchableOpacity : View;
-          const wrapperProps = pressable ? { onPress: () => router.push('/ventes'), activeOpacity: 0.7 } : {};
+          const isExpanded = expandedSaleId === sale.id;
+          const clientData = sale.clientId ? clients.find(c => c.id === sale.clientId) : null;
 
           return (
-            <Wrapper
-              key={sale.id + idx}
-              {...wrapperProps}
-              style={[styles.saleRow, idx < recentSales.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}
-            >
-              {/* Barre de fond proportionnelle au montant */}
-              <View style={[styles.saleProgressStrip, { backgroundColor: colors.primary + '08' }]}>
-                <View style={[styles.saleProgressFill, { backgroundColor: colors.primary + '30', width: `${progress * 100}%` as `${number}%` }]} />
-              </View>
-              <View style={styles.saleRowContent}>
-                <View style={styles.saleRowLeft}>
-                  {/* Avatar avec initiales */}
-                  <ClientAvatar name={sale.client} size={32} />
-                  <View style={styles.saleInfo}>
-                    <Text style={[styles.saleClient, { color: colors.text }]} numberOfLines={1}>{sale.client}</Text>
-                    <View style={styles.saleMeta}>
-                      <Text style={[styles.saleDate, { color: colors.textTertiary }]}>{formatDate(sale.date)}</Text>
-                      <StatusBadge status={sale.status} />
-                      <View style={[styles.paymentIconWrap, { backgroundColor: colors.primaryLight }]}>
-                        <PaymentIcon size={11} color={colors.primary} />
+            <View key={sale.id + idx}>
+              <TouchableOpacity
+                onPress={() => toggleSaleExpand(sale.id)}
+                activeOpacity={0.7}
+                style={[styles.saleRow, !isExpanded && idx < recentSales.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}
+              >
+                <View style={[styles.saleProgressStrip, { backgroundColor: colors.primary + '08' }]}>
+                  <View style={[styles.saleProgressFill, { backgroundColor: colors.primary + '30', width: `${progress * 100}%` as `${number}%` }]} />
+                </View>
+                <View style={styles.saleRowContent}>
+                  <View style={styles.saleRowLeft}>
+                    <ClientAvatar name={sale.client} size={32} />
+                    <View style={styles.saleInfo}>
+                      <Text style={[styles.saleClient, { color: colors.text }]} numberOfLines={1}>{sale.client}</Text>
+                      <View style={styles.saleMeta}>
+                        <Text style={[styles.saleDate, { color: colors.textTertiary }]}>{formatDate(sale.date)}</Text>
+                        <StatusBadge status={sale.status} />
+                        <View style={[styles.paymentIconWrap, { backgroundColor: colors.primaryLight }]}>
+                          <PaymentIcon size={11} color={colors.primary} />
+                        </View>
                       </View>
                     </View>
                   </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.SM }}>
+                    <Text style={[styles.saleAmount, { color: colors.primary }]}>{formatCurrency(sale.amount, cur)}</Text>
+                    <ChevronRight size={14} color={colors.textTertiary} style={{ transform: [{ rotate: isExpanded ? '90deg' : '0deg' }] }} />
+                  </View>
                 </View>
-                <Text style={[styles.saleAmount, { color: colors.primary }]}>{formatCurrency(sale.amount, cur)}</Text>
-              </View>
-            </Wrapper>
+              </TouchableOpacity>
+              {isExpanded && (
+                <View style={[styles.saleDetailPanel, { backgroundColor: colors.background, borderColor: colors.borderLight }]}>
+                  {clientData && (
+                    <View style={styles.saleDetailSection}>
+                      <Text style={[styles.saleDetailLabel, { color: colors.textTertiary }]}>Client</Text>
+                      <Text style={[styles.saleDetailValue, { color: colors.text }]}>
+                        {clientData.companyName || `${clientData.firstName} ${clientData.lastName}`}
+                      </Text>
+                      {clientData.email && <Text style={[styles.saleDetailSub, { color: colors.textSecondary }]}>{clientData.email}</Text>}
+                    </View>
+                  )}
+                  <View style={styles.saleDetailSection}>
+                    <Text style={[styles.saleDetailLabel, { color: colors.textTertiary }]}>Articles</Text>
+                    {sale.items.map((item, i) => (
+                      <View key={item.id || i} style={[styles.saleDetailItem, i < sale.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.saleDetailItemName, { color: colors.text }]} numberOfLines={1}>{item.productName}</Text>
+                          <Text style={[styles.saleDetailSub, { color: colors.textTertiary }]}>{item.quantity} x {formatCurrency(item.unitPrice, cur)}</Text>
+                        </View>
+                        <Text style={[styles.saleDetailItemTotal, { color: colors.text }]}>{formatCurrency(item.totalTTC, cur)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                  <View style={[styles.saleDetailTotals, { borderTopColor: colors.border }]}>
+                    <View style={styles.saleDetailTotalRow}>
+                      <Text style={[styles.saleDetailSub, { color: colors.textSecondary }]}>Total HT</Text>
+                      <Text style={[styles.saleDetailSub, { color: colors.textSecondary }]}>{formatCurrency(sale.totalHT, cur)}</Text>
+                    </View>
+                    <View style={styles.saleDetailTotalRow}>
+                      <Text style={[styles.saleDetailSub, { color: colors.textSecondary }]}>TVA</Text>
+                      <Text style={[styles.saleDetailSub, { color: colors.textSecondary }]}>{formatCurrency(sale.totalTVA, cur)}</Text>
+                    </View>
+                    <View style={styles.saleDetailTotalRow}>
+                      <Text style={[styles.saleDetailTotalLabel, { color: colors.text }]}>Total TTC</Text>
+                      <Text style={[styles.saleDetailTotalValue, { color: colors.primary }]}>{formatCurrency(sale.amount, cur)}</Text>
+                    </View>
+                  </View>
+                </View>
+              )}
+              {isExpanded && idx < recentSales.length - 1 && (
+                <View style={{ borderBottomWidth: 1, borderBottomColor: colors.borderLight }} />
+              )}
+            </View>
           );
         })}
       </View>
@@ -862,16 +910,27 @@ export default function DashboardScreen() {
   const renderOverviewTab = () => (
     <>
       {renderPeriodSelector()}
-      {renderTodayBanner()}
-      {renderActionCards()}
-
-      {/* KPIs principaux avec sparklines */}
-      <View style={[styles.kpiRow, isMobile && styles.kpiRowMobile]}>
+      {/* Today banner + Objectif CA side by side */}
+      <View style={[styles.todayAndTargetRow, isMobile && styles.todayAndTargetRowMobile && styles.kpiRowCompact]}>
+        {renderTodayBanner()}
+        <View style={[styles.card, styles.targetCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          <ProgressGauge
+            current={monthlyRevenue}
+            target={DEFAULT_MONTHLY_TARGET}
+            color={colors.primary}
+            bgColor={colors.borderLight}
+            label="Objectif CA mensuel"
+            formatValue={(v) => formatCurrencyInteger(v, cur)}
+            textColor={colors.text}
+            subtextColor={colors.textSecondary}
+          />
+        </View>
+        <View style={styles.kpiRowCompact}>
         <KPICard
           title={t('dashboard.monthlyRevenue')}
           value={formatCurrencyInteger(monthlyRevenue, cur)}
           change={Math.round(revenueChange * 10) / 10}
-          icon={<TrendingUp size={5} color={colors.primary} />}
+          icon={<TrendingUp size={15} color={colors.primary} />}
           onPress={() => router.push('/ventes')}
           sparklineData={revenueSparkline}
           sparklineColor={colors.primary}
@@ -879,17 +938,15 @@ export default function DashboardScreen() {
         <KPICard
           title={t('dashboard.grossProfit')}
           value={formatCurrencyInteger(grossMargin, cur)}
-          icon={<Target size={5} color={grossMargin >= 0 ? '#059669' : '#DC2626'} />}
+          icon={<Target size={15} color={grossMargin >= 0 ? '#059669' : '#DC2626'} />}
           accentColor={grossMargin >= 0 ? '#059669' : '#DC2626'}
           sparklineData={marginEvolution.map(m => m.margin)}
           sparklineColor={grossMargin >= 0 ? '#059669' : '#DC2626'}
         />
-      </View>
-      <View style={[styles.kpiRow, isMobile && styles.kpiRowMobile]}>
         <KPICard
           title={t('dashboard.salesNumber')}
           value={String(paidSalesCount)}
-          icon={<ShoppingCart size={16} color="#7C3AED" />}
+          icon={<ShoppingCart size={15} color="#7C3AED" />}
           accentColor="#7C3AED"
           onPress={() => router.push('/ventes')}
           sparklineData={salesSparkline}
@@ -898,32 +955,16 @@ export default function DashboardScreen() {
         <KPICard
           title={t('dashboard.unpaidAmount')}
           value={formatCurrencyInteger(unpaidAmount, cur)}
-          icon={<Clock size={16} color="#D97706" />}
+          icon={<Clock size={15} color="#D97706" />}
           accentColor="#D97706"
           onPress={() => router.push('/ventes')}
         />
-        <KPICard
-          title={t('dashboard.stockAlerts')}
-          value={String(lowStockProducts.length)}
-          icon={<AlertTriangle size={16} color="#DC2626" />}
-          accentColor="#DC2626"
-          onPress={() => router.push('/stock')}
-        />
       </View>
+      </View>
+      
+      {renderActionCards()}
 
-      {/* Objectif CA mensuel — barre de progression */}
-      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <ProgressGauge
-          current={monthlyRevenue}
-          target={DEFAULT_MONTHLY_TARGET}
-          color={colors.primary}
-          bgColor={colors.borderLight}
-          label="Objectif CA mensuel"
-          formatValue={(v) => formatCurrencyInteger(v, cur)}
-          textColor={colors.text}
-          subtextColor={colors.textSecondary}
-        />
-      </View>
+
 
       {/* Graphiques CA par semaine + Donut categories */}
       <View style={[styles.chartsRow, isMobile && styles.chartsRowMobile]}>
@@ -948,7 +989,7 @@ export default function DashboardScreen() {
                   return (
                     <View key={idx} style={styles.barCol}>
                       <View style={styles.barValueWrap}>
-                        {w.revenue > 0 && <Text style={[styles.barValueText, { color: colors.primary }]}>{formatCompact(w.revenue)}</Text>}
+                        {w.revenue > 0 && <Text style={[styles.barValueText, { color: colors.primary }]}>{formatCurrencyInteger(w.revenue, cur)}</Text>}
                       </View>
                       {w.revenue > 0 ? (
                         <View style={[styles.bar, { height: h, backgroundColor: colors.primary, opacity: w.isCurrent ? 1 : 0.55, borderRadius: RADIUS.XS }]} />
@@ -976,8 +1017,9 @@ export default function DashboardScreen() {
                 size={isMobile ? 110 : 130}
                 strokeWidth={isMobile ? 16 : 20}
                 showLegend={true}
-                centerValue={formatCompact(categoryBreakdown.reduce((s, seg) => s + seg.value, 0))}
+                centerValue={formatCurrencyInteger(categoryBreakdown.reduce((s, seg) => s + seg.value, 0), cur)}
                 centerLabel={cur}
+                
               />
             </View>
           </View>
@@ -1468,13 +1510,16 @@ export default function DashboardScreen() {
         />
       )}
       <ScrollView ref={scrollRef} style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* En-tete de bienvenue */}
+        {/* En-tete de bienvenue avec KPI cards */}
         <View style={styles.welcomeRow}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.greetingText, { color: colors.text }]}>{greeting}</Text>
             <Text style={[styles.dateText, { color: colors.textSecondary }]}>{todayStr}</Text>
           </View>
         </View>
+
+
+
 
         {simplifiedDashboard ? renderSimplifiedDashboard() : (
           <>
@@ -1509,6 +1554,7 @@ const styles = StyleSheet.create({
 
   kpiRow: { flexDirection: 'row', gap: SPACING.MD },
   kpiRowMobile: { flexWrap: 'wrap' },
+  kpiRowCompact: { flexDirection: 'row' as const, gap: SPACING.SM, flexWrap: 'wrap' as const },
 
   // Carte de base pour tous les blocs de contenu
   card: { borderWidth: 1, borderRadius: RADIUS.XL, padding: SPACING.XXXL, ...SHADOWS.SM },
@@ -1573,7 +1619,10 @@ const styles = StyleSheet.create({
   rankText: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.BOLD },
 
   // Banniere CA du jour
-  todayBanner: { borderWidth: 1, borderRadius: RADIUS.XL, padding: SPACING.XL, position: 'relative', overflow: 'hidden' , alignSelf: 'center', width: '100%', maxWidth: 270, },
+  todayAndTargetRow: { flexDirection: 'row' as const, gap: SPACING.SM, alignItems: 'stretch' as const },
+  todayAndTargetRowMobile: { flexDirection: 'column' as const },
+  targetCard: { flex: 1 },
+  todayBanner: { borderWidth: 1, borderRadius: RADIUS.XL, padding: SPACING.XL, position: 'relative', overflow: 'hidden', flex: 1 },
   todayAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderTopLeftRadius: RADIUS.XL, borderBottomLeftRadius: RADIUS.XL },
   todayBannerContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   todayLabel: { fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM, marginBottom: SPACING.XXS },
@@ -1632,6 +1681,19 @@ const styles = StyleSheet.create({
   movementMeta: { flexDirection: 'row', alignItems: 'center', gap: SPACING.SM, marginTop: SPACING.XXS, flexWrap: 'wrap' },
   sourceBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: RADIUS.XS },
   sourceText: { fontSize: 9, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+
+  saleDetailPanel: { marginHorizontal: SPACING.SM, marginBottom: SPACING.SM, borderWidth: 1, borderRadius: RADIUS.LG, padding: SPACING.XL, gap: SPACING.LG },
+  saleDetailSection: { gap: SPACING.SM },
+  saleDetailLabel: { fontSize: TYPOGRAPHY.SIZE.TINY, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD, textTransform: 'uppercase' as const, letterSpacing: TYPOGRAPHY.LETTER_SPACING.WIDE },
+  saleDetailValue: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+  saleDetailSub: { fontSize: TYPOGRAPHY.SIZE.CAPTION },
+  saleDetailItem: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, paddingVertical: SPACING.SM },
+  saleDetailItemName: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM },
+  saleDetailItemTotal: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+  saleDetailTotals: { borderTopWidth: 1, paddingTop: SPACING.LG, gap: SPACING.XS },
+  saleDetailTotalRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const },
+  saleDetailTotalLabel: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.BOLD },
+  saleDetailTotalValue: { fontSize: TYPOGRAPHY.SIZE.BODY, fontWeight: TYPOGRAPHY.WEIGHT.BOLD },
 
   // Boutons export PDF
   exportBtnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.MD, marginTop: SPACING.LG },

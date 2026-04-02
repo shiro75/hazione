@@ -1,5 +1,5 @@
 /**
- * @fileoverview Core type definitions for BizManage France SaaS.
+ * @fileoverview Core type definitions for HaziOne.
  * Contains all interfaces, enums, and type aliases used across the application
  * including business entities (invoices, quotes, products), user management,
  * shop/e-commerce, and theme configuration.
