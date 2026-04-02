@@ -16,9 +16,11 @@ interface KPICardProps {
   icon: React.ReactNode;
   accentColor?: string;
   onPress?: () => void;
+  sparklineData?: number[];    
+  sparklineColor?: string;
 }
 
-export default React.memo(function KPICard({ title, value, change, icon, accentColor, onPress }: KPICardProps) {
+export default React.memo(function KPICard({ title, value, change, icon, accentColor, onPress, sparklineData, sparklineColor }: KPICardProps) {
   const { colors } = useTheme();
   const isPositive = (change ?? 0) >= 0;
   const Wrapper: React.ElementType = onPress ? TouchableOpacity : View;

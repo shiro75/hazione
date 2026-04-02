@@ -875,7 +875,6 @@ export default function DashboardScreen() {
           onPress={() => router.push('/ventes')}
           sparklineData={revenueSparkline}
           sparklineColor={colors.primary}
-          compact={true}
         />
         <KPICard
           title={t('dashboard.grossProfit')}
@@ -884,7 +883,6 @@ export default function DashboardScreen() {
           accentColor={grossMargin >= 0 ? '#059669' : '#DC2626'}
           sparklineData={marginEvolution.map(m => m.margin)}
           sparklineColor={grossMargin >= 0 ? '#059669' : '#DC2626'}
-          compact={true}
         />
       </View>
       <View style={[styles.kpiRow, isMobile && styles.kpiRowMobile]}>
