@@ -1600,7 +1600,7 @@ const renderProductGrid = () => (
                       ]}
                       onPress={() => {
                         if (isCardDisabled) {
-                          showToast('Veuillez configurer vos informations bancaires dans Param\u00e8tres \u2192 Administration \u2192 Paiements', 'error');
+                          showToast('Veuillez configurer vos informations bancaires dans Paramètres → Administration → Paiements', 'error');
                           return;
                         }
                         setSelectedCategory(pm.value);
@@ -1613,7 +1613,7 @@ const renderProductGrid = () => (
                         {pm.label}
                       </Text>
                       {isCardDisabled ? (
-                        <Text style={{ fontSize: 8, color: colors.danger, marginTop: 2 }}>Non configur\u00e9</Text>
+                        <Text style={{ fontSize: 8, color: colors.danger, marginTop: 2 }}>Non configuré</Text>
                       ) : null}
                     </TouchableOpacity>
                   );
@@ -1632,7 +1632,7 @@ const renderProductGrid = () => (
                 ]}
                 onPress={() => {
                   if (!banking.isDigitalPaymentAvailable) {
-                    showToast('Veuillez configurer vos informations bancaires dans Param\u00e8tres \u2192 Administration \u2192 Paiements', 'error');
+                    showToast('Veuillez configurer vos informations bancaires dans Paramètres → Administration → Paiements', 'error');
                     return;
                   }
                   setSelectedCategory('digital');
@@ -1655,7 +1655,7 @@ const renderProductGrid = () => (
                   </Text>
                 </View>
                 {!banking.isDigitalPaymentAvailable ? (
-                  <Text style={{ color: '#FFF', fontSize: 9, fontWeight: '600' as const, opacity: 0.8 }}>Non configur\u00e9</Text>
+                  <Text style={{ color: '#FFF', fontSize: 9, fontWeight: '600' as const, opacity: 0.8 }}>Non configuré</Text>
                 ) : null}
               </TouchableOpacity>
             </View>

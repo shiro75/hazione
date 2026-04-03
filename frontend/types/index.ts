@@ -742,7 +742,7 @@ export interface WarehouseTransfer {
   createdAt: string;
 }
 
-export type ModuleKey = 'dashboard' | 'clients' | 'products' | 'sales' | 'quotes' | 'invoices' | 'cashflow' | 'settings' | 'admin' | 'ventes' | 'achats' | 'stock' | 'shop' | 'payments';
+export type ModuleKey = 'dashboard' | 'clients' | 'products' | 'sales' | 'quotes' | 'invoices' | 'cashflow' | 'settings' | 'admin' | 'ventes' | 'achats' | 'stock' | 'shop' | 'payments' | 'staff';
 
 export interface ModuleConfig {
   key: ModuleKey;
@@ -924,6 +924,98 @@ export interface Recipe {
   variantId?: string;
   companyId: string;
   items: RecipeItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ContractType = 'CDI' | 'CDD' | 'Apprenti' | 'Stage' | 'Interim' | 'Freelance' | 'Autre';
+
+export type ExpenseType = 'note_de_frais' | 'salaire' | 'loyer' | 'assurance' | 'fournitures' | 'transport' | 'marketing' | 'abonnement' | 'taxes' | 'autre';
+
+export type PayslipStatus = 'draft' | 'validated' | 'paid';
+
+export type ExpenseStatus = 'pending' | 'approved' | 'paid' | 'rejected';
+
+export interface Employee {
+  id: string;
+  companyId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+  postalCode: string;
+  country: string;
+  department: string;
+  position: string;
+  contractType: ContractType;
+  hourlyRate: number;
+  monthlySalary: number;
+  hireDate: string;
+  endDate?: string;
+  socialSecurityNumber: string;
+  notes: string;
+  isActive: boolean;
+  isDeleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmployeeSchedule {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  weekStart: string;
+  dayOfWeek: number;
+  plannedStart?: string;
+  plannedEnd?: string;
+  plannedHours: number;
+  actualStart?: string;
+  actualEnd?: string;
+  actualHours: number;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Payslip {
+  id: string;
+  companyId: string;
+  employeeId: string;
+  employeeName?: string;
+  periodStart: string;
+  periodEnd: string;
+  plannedHours: number;
+  actualHours: number;
+  overtimeHours: number;
+  hourlyRate: number;
+  grossSalary: number;
+  deductions: number;
+  netSalary: number;
+  status: PayslipStatus;
+  validatedAt?: string;
+  paidAt?: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CompanyExpense {
+  id: string;
+  companyId: string;
+  expenseType: ExpenseType;
+  description: string;
+  amount: number;
+  vatAmount: number;
+  vatRate: number;
+  date: string;
+  supplierName: string;
+  reference: string;
+  paymentMethod: string;
+  status: ExpenseStatus;
+  notes: string;
+  isDeleted: boolean;
   createdAt: string;
   updatedAt: string;
 }

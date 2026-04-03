@@ -203,7 +203,7 @@ export default function CashFlowScreen() {
   ];
 
   const JOURNAL_LABELS: Record<string, string> = {
-    cash: 'Caisse esp\u00e8ces',
+    cash: 'Caisse espèces',
     bank: 'Compte bancaire',
     card: 'Carte',
     other: 'Autre',

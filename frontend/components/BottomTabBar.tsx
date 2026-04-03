@@ -27,6 +27,7 @@ import {
   Shield,
   Store,
   CreditCard,
+  Users,
   X,
 } from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -55,6 +56,7 @@ const PRIMARY_TABS: TabItem[] = [
 const OVERFLOW_TABS: TabItem[] = [
   { labelKey: 'nav.boutique', icon: Store, route: '/boutique', moduleKey: 'shop' },
   { labelKey: 'nav.payments', icon: CreditCard, route: '/payments', moduleKey: 'payments' },
+  { labelKey: 'nav.staff', icon: Users, route: '/staff', moduleKey: 'staff' },
   { labelKey: 'nav.settings', icon: Settings, route: '/settings', moduleKey: 'settings' },
   { labelKey: 'nav.admin', icon: Shield, route: '/admin', moduleKey: 'admin' },
 ];

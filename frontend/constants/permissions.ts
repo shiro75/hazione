@@ -18,7 +18,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
   admin: {
     label: 'Propriétaire',
     description: 'Accès complet à toutes les fonctionnalités',
-    allowedModules: ['dashboard', 'clients', 'products', 'sales', 'quotes', 'invoices', 'cashflow', 'settings', 'admin', 'ventes', 'achats', 'stock', 'shop'],
+    allowedModules: ['dashboard', 'clients', 'products', 'sales', 'quotes', 'invoices', 'cashflow', 'settings', 'admin', 'ventes', 'achats', 'stock', 'shop', 'staff'],
     canDeleteCompany: true,
     canManageSubscription: true,
     canManageEmployees: true,
@@ -31,7 +31,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, RolePermissions> = {
   manager: {
     label: 'Gérant',
     description: 'Accès à tout sauf suppression entreprise et abonnement',
-    allowedModules: ['dashboard', 'clients', 'products', 'sales', 'quotes', 'invoices', 'cashflow', 'settings', 'admin', 'ventes', 'achats', 'stock', 'shop'],
+    allowedModules: ['dashboard', 'clients', 'products', 'sales', 'quotes', 'invoices', 'cashflow', 'settings', 'admin', 'ventes', 'achats', 'stock', 'shop', 'staff'],
     canDeleteCompany: false,
     canManageSubscription: false,
     canManageEmployees: true,
@@ -91,6 +91,7 @@ export function canAccessRoute(role: UserRole, route: string): boolean {
     '/invoices': 'invoices',
     '/cashflow': 'cashflow',
     '/boutique': 'shop',
+    '/staff': 'staff',
     '/settings': 'settings',
     '/admin': 'admin',
   };

@@ -20,6 +20,7 @@ import type {
   Warehouse, WarehouseTransfer,
   PaymentReminderLog, PaymentReminderChannel,
   Recipe, RecipeItem,
+  Employee, EmployeeSchedule, Payslip, CompanyExpense,
 } from '@/types';
 import { MODULE_CONFIGS, isModuleAvailableForPlan } from '@/constants/modules';
 import { db } from '@/services/supabaseData';
@@ -47,6 +48,10 @@ function buildQueryKeys(companyId: string) {
     stockMovements: ['stockMovements', companyId],
     reminderLogs: ['reminderLogs', companyId],
     variants: ['variants', companyId],
+    employees: ['employees', companyId],
+    schedules: ['schedules', companyId],
+    payslips: ['payslips', companyId],
+    expenses: ['expenses', companyId],
   };
 }
 
@@ -256,6 +261,45 @@ export const [DataProvider, useData] = createContextHook(() => {
   const auditLogs = (auditLogsQuery.data ?? []);
   const variants = variantsQuery.data ?? [];
 
+  const employeesQuery = useQuery({
+    queryKey: QUERY_KEYS.employees,
+    queryFn: () => db.fetchEmployees(COMPANY_ID),
+    enabled: seeded,
+    staleTime: 10000,
+    ...queryDefaults,
+  });
+
+  const schedulesQuery = useQuery({
+    queryKey: QUERY_KEYS.schedules,
+    queryFn: () => db.fetchSchedules(COMPANY_ID),
+    enabled: seeded,
+    staleTime: 10000,
+    ...queryDefaults,
+  });
+
+  const payslipsQuery = useQuery({
+    queryKey: QUERY_KEYS.payslips,
+    queryFn: () => db.fetchPayslips(COMPANY_ID),
+    enabled: seeded,
+    staleTime: 10000,
+    ...queryDefaults,
+  });
+
+  const expensesQuery = useQuery({
+    queryKey: QUERY_KEYS.expenses,
+    queryFn: () => db.fetchExpenses(COMPANY_ID),
+    enabled: seeded,
+    staleTime: 10000,
+    ...queryDefaults,
+  });
+
+  const employees = employeesQuery.data ?? [];
+  const activeEmployees = useMemo(() => employees.filter(e => !e.isDeleted), [employees]);
+  const schedules = schedulesQuery.data ?? [];
+  const payslips = payslipsQuery.data ?? [];
+  const companyExpenses = expensesQuery.data ?? [];
+  const activeExpenses = useMemo(() => companyExpenses.filter(e => !e.isDeleted), [companyExpenses]);
+
   // ====== PRODUCT METADATA (AsyncStorage-based, no broken DB tables) ======
 
   const categoriesLocalQuery = useQuery({
@@ -327,15 +371,34 @@ export const [DataProvider, useData] = createContextHook(() => {
     await AsyncStorage.setItem(`product-attributes-${COMPANY_ID}`, JSON.stringify(attrs));
   }, [COMPANY_ID]);
 
-  // ====== RECIPES (AsyncStorage-based) ======
+  // ====== RECIPES (Supabase-based with AsyncStorage fallback) ======
 
   const recipesQuery = useQuery({
     queryKey: ['recipes', COMPANY_ID],
     queryFn: async () => {
+      if (isSupabaseConfigured) {
+        const dbRecipes = await db.fetchRecipes(COMPANY_ID);
+        if (dbRecipes && dbRecipes.length > 0) {
+          const mapped = dbRecipes.map(r => ({
+            id: r.id,
+            productId: r.productId,
+            variantId: r.variantId,
+            companyId: r.companyId,
+            items: r.items as RecipeItem[],
+            createdAt: r.createdAt,
+            updatedAt: r.updatedAt,
+          }));
+          await AsyncStorage.setItem(`recipes-${COMPANY_ID}`, JSON.stringify(mapped));
+          return mapped;
+        }
+      }
       const stored = await AsyncStorage.getItem(`recipes-${COMPANY_ID}`);
       if (stored) return JSON.parse(stored) as Recipe[];
-      return null;
+      return [] as Recipe[];
     },
+    enabled: seeded,
+    staleTime: 10000,
+    ...queryDefaults,
   });
 
   useEffect(() => {
@@ -921,8 +984,14 @@ export const [DataProvider, useData] = createContextHook(() => {
       (old ?? []).filter((p) => p.id !== id)
     );
 
+    const updatedRecipes = recipes.filter(r => r.productId !== id);
+    setRecipes(updatedRecipes);
+    queryClient.setQueryData(['recipes', COMPANY_ID], updatedRecipes);
+    void persistRecipes(updatedRecipes);
+
     void (async () => {
       try {
+        await db.deleteRecipesForProduct(id).catch(() => {});
         await db.deleteProduct(id);
       } catch {
         showToast('Erreur lors de la suppression du produit', 'error');
@@ -934,7 +1003,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     void writeAudit('delete', 'product', id, product.name, `Produit supprimé définitivement: ${product.name}`);
     showToast(`Produit "${product.name}" supprimé définitivement`);
     return { success: true };
-  }, [products, showToast, queryClient, writeAudit, QUERY_KEYS]);
+  }, [products, recipes, showToast, queryClient, writeAudit, QUERY_KEYS, COMPANY_ID, persistRecipes]);
 
   // ====== INVOICES CRUD ======
 
@@ -1326,6 +1395,22 @@ export const [DataProvider, useData] = createContextHook(() => {
     return recipes.filter(r => r.productId === productId);
   }, [recipes]);
 
+  const calculateRecipeCost = useCallback((items: RecipeItem[]): number => {
+    let totalCost = 0;
+    items.forEach(item => {
+      const ingredientProduct = products.find(p => p.id === item.ingredientProductId);
+      if (ingredientProduct) {
+        let unitCost = ingredientProduct.purchasePrice;
+        if (item.ingredientVariantId) {
+          const ingredientVariant = variants.find(v => v.id === item.ingredientVariantId);
+          if (ingredientVariant) unitCost = ingredientVariant.purchasePrice;
+        }
+        totalCost += unitCost * item.quantity;
+      }
+    });
+    return Math.round(totalCost * 100) / 100;
+  }, [products, variants]);
+
   const saveRecipe = useCallback((productId: string, items: RecipeItem[], variantId?: string): { success: boolean; error?: string } => {
     if (items.length === 0) return { success: false, error: 'Au moins un ingredient est requis' };
     const invalidItem = items.find(i => i.quantity <= 0);
@@ -1334,11 +1419,13 @@ export const [DataProvider, useData] = createContextHook(() => {
     const now = new Date().toISOString();
     const existingIdx = recipes.findIndex(r => r.productId === productId && (variantId ? r.variantId === variantId : !r.variantId));
 
+    let savedRecipe: Recipe;
     let updated: Recipe[];
     if (existingIdx >= 0) {
-      updated = recipes.map((r, i) => i === existingIdx ? { ...r, items, updatedAt: now } : r);
+      savedRecipe = { ...recipes[existingIdx], items, updatedAt: now };
+      updated = recipes.map((r, i) => i === existingIdx ? savedRecipe : r);
     } else {
-      const newRecipe: Recipe = {
+      savedRecipe = {
         id: generateId('recipe'),
         productId,
         variantId,
@@ -1347,20 +1434,56 @@ export const [DataProvider, useData] = createContextHook(() => {
         createdAt: now,
         updatedAt: now,
       };
-      updated = [...recipes, newRecipe];
+      updated = [...recipes, savedRecipe];
     }
     setRecipes(updated);
     queryClient.setQueryData(['recipes', COMPANY_ID], updated);
     void persistRecipes(updated);
+
+    void db.upsertRecipe({
+      id: savedRecipe.id,
+      productId: savedRecipe.productId,
+      variantId: savedRecipe.variantId,
+      companyId: savedRecipe.companyId,
+      items: savedRecipe.items,
+      updatedAt: now,
+    }).catch(() => {
+      console.log('[Recipe] Failed to persist recipe to Supabase, kept in AsyncStorage');
+    });
+
+    const totalCost = calculateRecipeCost(items);
+    if (variantId) {
+      const variant = variants.find(v => v.id === variantId);
+      if (variant) {
+        const variantUpdate = { purchasePrice: totalCost, updatedAt: now };
+        queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+          (old ?? []).map(v => v.id === variantId ? { ...v, ...variantUpdate } : v)
+        );
+        void db.updateVariant(variantId, variantUpdate as Partial<ProductVariant>).catch(() => {});
+      }
+    } else {
+      const productUpdate = { purchasePrice: totalCost, updatedAt: now };
+      queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+        (old ?? []).map(p => p.id === productId ? { ...p, ...productUpdate } : p)
+      );
+      void db.updateProduct(productId, productUpdate).catch(() => {});
+    }
+
     showToast('Recette enregistree');
     return { success: true };
-  }, [recipes, COMPANY_ID, persistRecipes, showToast, queryClient]);
+  }, [recipes, COMPANY_ID, persistRecipes, showToast, queryClient, calculateRecipeCost, variants, QUERY_KEYS]);
 
   const deleteRecipe = useCallback((productId: string, variantId?: string) => {
+    const recipeToDelete = recipes.find(r => r.productId === productId && (variantId ? r.variantId === variantId : !r.variantId));
     const updated = recipes.filter(r => !(r.productId === productId && (variantId ? r.variantId === variantId : !r.variantId)));
     setRecipes(updated);
     queryClient.setQueryData(['recipes', COMPANY_ID], updated);
     void persistRecipes(updated);
+    if (recipeToDelete) {
+      void db.deleteRecipe(recipeToDelete.id).catch(() => {
+        console.log('[Recipe] Failed to delete recipe from Supabase');
+      });
+    }
     showToast('Recette supprimee');
   }, [recipes, persistRecipes, showToast, queryClient, COMPANY_ID]);
 
@@ -1369,6 +1492,9 @@ export const [DataProvider, useData] = createContextHook(() => {
     setRecipes(updated);
     queryClient.setQueryData(['recipes', COMPANY_ID], updated);
     void persistRecipes(updated);
+    void db.deleteRecipesForProduct(productId).catch(() => {
+      console.log('[Recipe] Failed to delete recipes for product from Supabase');
+    });
   }, [recipes, persistRecipes, queryClient, COMPANY_ID]);
 
   const deductRecipeIngredients = useCallback((productId: string, saleQuantity: number, saleNumber: string, variantId?: string) => {
@@ -1983,7 +2109,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     const po = purchaseOrders.find((p) => p.id === poId);
     if (!po) return { success: false, error: 'Commande introuvable' };
     const existingInvoice = supplierInvoices.find((si) => si.purchaseOrderId === poId);
-    if (existingInvoice) return { success: false, error: 'Une facture existe d\u00e9j\u00e0 pour cette commande' };
+    if (existingInvoice) return { success: false, error: 'Une facture existe déjà pour cette commande' };
     const siItems: SupplierInvoiceItem[] = po.items.map((item) => ({
       id: generateId('sii'),
       supplierInvoiceId: '',
@@ -2786,6 +2912,150 @@ export const [DataProvider, useData] = createContextHook(() => {
     }
   }, [COMPANY_ID, QUERY_KEYS, queryClient, showToast]);
 
+  // ====== EMPLOYEES CRUD ======
+
+  const createEmployee = useCallback((data: Omit<Employee, 'id' | 'companyId' | 'isDeleted' | 'createdAt' | 'updatedAt'>): { success: boolean; error?: string } => {
+    if (!data.firstName.trim() || !data.lastName.trim()) return { success: false, error: 'Le prénom et le nom sont requis' };
+    const now = new Date().toISOString();
+    const newEmployee: Employee = {
+      ...data,
+      id: generateId('emp'),
+      companyId: COMPANY_ID,
+      isDeleted: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    queryClient.setQueryData<Employee[]>(QUERY_KEYS.employees, (old) => [newEmployee, ...(old ?? [])]);
+    void db.insertEmployee(newEmployee).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.employees });
+    });
+    showToast(`Employé "${data.firstName} ${data.lastName}" créé`);
+    return { success: true };
+  }, [showToast, queryClient, COMPANY_ID, QUERY_KEYS]);
+
+  const updateEmployee = useCallback((id: string, data: Partial<Employee>): { success: boolean; error?: string } => {
+    const updated = { ...data, updatedAt: new Date().toISOString() };
+    queryClient.setQueryData<Employee[]>(QUERY_KEYS.employees, (old) =>
+      (old ?? []).map((e) => e.id === id ? { ...e, ...updated } : e)
+    );
+    void db.updateEmployee(id, updated).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.employees });
+    });
+    showToast('Employé mis à jour');
+    return { success: true };
+  }, [showToast, queryClient, QUERY_KEYS]);
+
+  const deleteEmployee = useCallback((id: string): void => {
+    const updated = { isDeleted: true, updatedAt: new Date().toISOString() };
+    queryClient.setQueryData<Employee[]>(QUERY_KEYS.employees, (old) =>
+      (old ?? []).map((e) => e.id === id ? { ...e, ...updated } : e)
+    );
+    void db.updateEmployee(id, updated as Partial<Employee>).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.employees });
+    });
+    showToast('Employé supprimé');
+  }, [showToast, queryClient, QUERY_KEYS]);
+
+  // ====== SCHEDULES CRUD ======
+
+  const upsertSchedule = useCallback((schedule: EmployeeSchedule): void => {
+    queryClient.setQueryData<EmployeeSchedule[]>(QUERY_KEYS.schedules, (old) => {
+      const idx = (old ?? []).findIndex(s => s.id === schedule.id);
+      if (idx >= 0) {
+        const copy = [...(old ?? [])];
+        copy[idx] = schedule;
+        return copy;
+      }
+      return [schedule, ...(old ?? [])];
+    });
+    void db.upsertSchedule(schedule).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
+    });
+  }, [queryClient, QUERY_KEYS]);
+
+  const deleteSchedule = useCallback((id: string): void => {
+    queryClient.setQueryData<EmployeeSchedule[]>(QUERY_KEYS.schedules, (old) =>
+      (old ?? []).filter(s => s.id !== id)
+    );
+    void db.deleteSchedule(id).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.schedules });
+    });
+  }, [queryClient, QUERY_KEYS]);
+
+  // ====== PAYSLIPS CRUD ======
+
+  const createPayslip = useCallback((data: Omit<Payslip, 'id' | 'companyId' | 'createdAt' | 'updatedAt'>): { success: boolean; error?: string; id?: string } => {
+    const now = new Date().toISOString();
+    const newId = generateId('pay');
+    const newPayslip: Payslip = {
+      ...data,
+      id: newId,
+      companyId: COMPANY_ID,
+      createdAt: now,
+      updatedAt: now,
+    };
+    queryClient.setQueryData<Payslip[]>(QUERY_KEYS.payslips, (old) => [newPayslip, ...(old ?? [])]);
+    void db.insertPayslip(newPayslip).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.payslips });
+    });
+    showToast('Fiche de paie créée');
+    return { success: true, id: newId };
+  }, [showToast, queryClient, COMPANY_ID, QUERY_KEYS]);
+
+  const updatePayslip = useCallback((id: string, data: Partial<Payslip>): void => {
+    const updated = { ...data, updatedAt: new Date().toISOString() };
+    queryClient.setQueryData<Payslip[]>(QUERY_KEYS.payslips, (old) =>
+      (old ?? []).map((p) => p.id === id ? { ...p, ...updated } : p)
+    );
+    void db.updatePayslip(id, updated).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.payslips });
+    });
+  }, [queryClient, QUERY_KEYS]);
+
+  // ====== EXPENSES CRUD ======
+
+  const createExpense = useCallback((data: Omit<CompanyExpense, 'id' | 'companyId' | 'isDeleted' | 'createdAt' | 'updatedAt'>): { success: boolean; error?: string } => {
+    if (!data.description.trim()) return { success: false, error: 'La description est requise' };
+    const now = new Date().toISOString();
+    const newExpense: CompanyExpense = {
+      ...data,
+      id: generateId('exp'),
+      companyId: COMPANY_ID,
+      isDeleted: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    queryClient.setQueryData<CompanyExpense[]>(QUERY_KEYS.expenses, (old) => [newExpense, ...(old ?? [])]);
+    void db.insertExpense(newExpense).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.expenses });
+    });
+    showToast(`Dépense "${data.description}" créée`);
+    return { success: true };
+  }, [showToast, queryClient, COMPANY_ID, QUERY_KEYS]);
+
+  const updateExpense = useCallback((id: string, data: Partial<CompanyExpense>): { success: boolean; error?: string } => {
+    const updated = { ...data, updatedAt: new Date().toISOString() };
+    queryClient.setQueryData<CompanyExpense[]>(QUERY_KEYS.expenses, (old) =>
+      (old ?? []).map((e) => e.id === id ? { ...e, ...updated } : e)
+    );
+    void db.updateExpense(id, updated).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.expenses });
+    });
+    showToast('Dépense mise à jour');
+    return { success: true };
+  }, [showToast, queryClient, QUERY_KEYS]);
+
+  const deleteExpense = useCallback((id: string): void => {
+    const updated = { isDeleted: true, updatedAt: new Date().toISOString() };
+    queryClient.setQueryData<CompanyExpense[]>(QUERY_KEYS.expenses, (old) =>
+      (old ?? []).map((e) => e.id === id ? { ...e, ...updated } : e)
+    );
+    void db.updateExpense(id, updated as Partial<CompanyExpense>).catch(() => {
+      void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.expenses });
+    });
+    showToast('Dépense supprimée');
+  }, [showToast, queryClient, QUERY_KEYS]);
+
   return useMemo(() => ({
     clients,
     activeClients,
@@ -2933,6 +3203,11 @@ export const [DataProvider, useData] = createContextHook(() => {
     saveRecipe,
     deleteRecipe,
     deleteAllRecipesForProduct,
+    employees, activeEmployees, schedules, payslips, companyExpenses, activeExpenses,
+    createEmployee, updateEmployee, deleteEmployee,
+    upsertSchedule, deleteSchedule,
+    createPayslip, updatePayslip,
+    createExpense, updateExpense, deleteExpense,
   }), [
     clients, activeClients, products, activeProducts, invoices, quotes, company, updateCompanySettings, toasts,
     showToast, dismissToast,
@@ -2970,5 +3245,10 @@ export const [DataProvider, useData] = createContextHook(() => {
     createWarehouse, updateWarehouse, deleteWarehouse, createWarehouseTransfer,
     paymentReminderLogs, logPaymentReminder, getClientReminderLogs,
     recipes, getRecipeForProduct, getRecipesForProduct, saveRecipe, deleteRecipe, deleteAllRecipesForProduct,
+    employees, activeEmployees, schedules, payslips, companyExpenses, activeExpenses,
+    createEmployee, updateEmployee, deleteEmployee,
+    upsertSchedule, deleteSchedule,
+    createPayslip, updatePayslip,
+    createExpense, updateExpense, deleteExpense,
   ]);
 });

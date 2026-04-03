@@ -57,6 +57,13 @@ export const MODULE_CONFIGS: ModuleConfig[] = [
     plans: ['pro', 'business'],
   },
   {
+    key: 'staff',
+    label: 'Équipe',
+    description: 'Gestion des employés, plannings et fiches de paie',
+    alwaysEnabled: false,
+    plans: ['pro', 'business'],
+  },
+  {
     key: 'settings',
     label: 'Paramètres',
     description: 'Configuration de l\'entreprise et préférences',
@@ -97,6 +104,7 @@ export const MODULE_ROUTE_MAP: Record<string, string> = {
   cashflow: '/cashflow',
   shop: '/boutique',
   payments: '/payments',
+  staff: '/staff',
   settings: '/settings',
   admin: '/admin',
 };

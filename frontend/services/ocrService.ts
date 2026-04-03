@@ -23,7 +23,7 @@ export interface ParsedInvoiceData {
 
 function parseAmount(str: string): number | null {
   if (!str) return null;
-  let cleaned = str.replace(/[€$£\s\u00a0]/g, '').trim();
+  let cleaned = str.replace(/[€$£\s ]/g, '').trim();
   if (!cleaned) return null;
   if (cleaned.includes(',')) {
     const parts = cleaned.split(',');
@@ -101,7 +101,7 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   const datePatterns = [
-    /(?:date\s*(?:de\s*)?(?:la\s*)?facture|invoice\s*date|date\s*d[''\u2019]émission|date\s*:)\s*[:\s]*(.{8,30})/i,
+    /(?:date\s*(?:de\s*)?(?:la\s*)?facture|invoice\s*date|date\s*d[''’]émission|date\s*:)\s*[:\s]*(.{8,30})/i,
     /(?:émis(?:e)?\s*le|du)\s*[:\s]*(.{8,30})/i,
     /(?:date\s*facture)\s*[:\s]*(.{8,30})/i,
   ];
@@ -120,7 +120,7 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   const dueDatePatterns = [
-    /(?:échéance|date\s*d[''\u2019]échéance|due\s*date|payable\s*(?:avant|le)|à\s*régler\s*(?:avant|le))\s*[:\s]*(.{8,30})/i,
+    /(?:échéance|date\s*d[''’]échéance|due\s*date|payable\s*(?:avant|le)|à\s*régler\s*(?:avant|le))\s*[:\s]*(.{8,30})/i,
     /(?:date\s*limite\s*(?:de\s*)?paiement)\s*[:\s]*(.{8,30})/i,
   ];
   for (const pattern of dueDatePatterns) {
@@ -158,8 +158,8 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   const htPatterns = [
-    /(?:total\s*(?:hors\s*taxes?|H\.?T\.?)|sous[_\-\s]*total\s*(?:H\.?T\.?)?|subtotal|total\s*net\s*(?:H\.?T\.?)?)\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
-    /(?:montant\s*H\.?T\.?)\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
+    /(?:total\s*(?:hors\s*taxes?|H\.?T\.?)|sous[_\-\s]*total\s*(?:H\.?T\.?)?|subtotal|total\s*net\s*(?:H\.?T\.?)?)\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
+    /(?:montant\s*H\.?T\.?)\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
   ];
   for (const pattern of htPatterns) {
     const m = text.match(pattern);
@@ -167,8 +167,8 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   const tvaAmountPatterns = [
-    /(?:total\s*TVA|montant\s*(?:de\s*la\s*)?TVA|TVA\s*(?:\d+[,.]\d*\s*%\s*)?(?:sur|:))\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
-    /(?:TVA)\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
+    /(?:total\s*TVA|montant\s*(?:de\s*la\s*)?TVA|TVA\s*(?:\d+[,.]\d*\s*%\s*)?(?:sur|:))\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
+    /(?:TVA)\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
   ];
   for (const pattern of tvaAmountPatterns) {
     const m = text.match(pattern);
@@ -176,8 +176,8 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   const ttcPatterns = [
-    /(?:total\s*T\.?T\.?C\.?|montant\s*T\.?T\.?C\.?|net\s*à\s*payer|amount\s*due|total\s*à\s*payer|montant\s*à\s*régler)\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
-    /(?:total\s*général)\s*[:\s]*([\d\s\u00a0]+[,.]\d{2})/i,
+    /(?:total\s*T\.?T\.?C\.?|montant\s*T\.?T\.?C\.?|net\s*à\s*payer|amount\s*due|total\s*à\s*payer|montant\s*à\s*régler)\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
+    /(?:total\s*général)\s*[:\s]*([\d\s ]+[,.]\d{2})/i,
   ];
   for (const pattern of ttcPatterns) {
     const m = text.match(pattern);
@@ -185,7 +185,7 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
   }
 
   if (!result.total_ttc) {
-    const amountRegex = /([\d\s\u00a0]+[,.]\d{2})/g;
+    const amountRegex = /([\d\s ]+[,.]\d{2})/g;
     const allAmounts = text.match(amountRegex);
     if (allAmounts) {
       let max = 0;
@@ -231,7 +231,7 @@ export function parseInvoiceText(text: string): ParsedInvoiceData {
 
   const productLines: Array<{ description: string; quantity: number; unit_price: number }> = [];
   for (const line of allLines) {
-    const numbers = line.match(/([\d\s\u00a0]+[,.]\d{2})/g);
+    const numbers = line.match(/([\d\s ]+[,.]\d{2})/g);
     if (numbers && numbers.length >= 2) {
       const firstNumIdx = line.indexOf(numbers[0]);
       const desc = line.substring(0, firstNumIdx).trim();

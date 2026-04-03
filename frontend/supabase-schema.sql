@@ -1143,6 +1143,131 @@ CREATE POLICY "Allow authenticated updates to shop-assets" ON storage.objects
   USING (bucket_id = 'shop-assets');
 
 
+-- 2.30 employees
+CREATE TABLE employees (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  address TEXT NOT NULL DEFAULT '',
+  city TEXT NOT NULL DEFAULT '',
+  postal_code TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT 'France',
+  department TEXT NOT NULL DEFAULT '',
+  position TEXT NOT NULL DEFAULT '',
+  contract_type TEXT NOT NULL DEFAULT 'CDI',
+  hourly_rate NUMERIC(10,2) NOT NULL DEFAULT 0,
+  monthly_salary NUMERIC(10,2) NOT NULL DEFAULT 0,
+  hire_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+  end_date TIMESTAMPTZ,
+  social_security_number TEXT DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  is_deleted BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 2.31 employee_schedules
+CREATE TABLE employee_schedules (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  week_start DATE NOT NULL,
+  day_of_week INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+  planned_start TIME,
+  planned_end TIME,
+  planned_hours NUMERIC(5,2) NOT NULL DEFAULT 0,
+  actual_start TIME,
+  actual_end TIME,
+  actual_hours NUMERIC(5,2) NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 2.32 payslips
+CREATE TABLE payslips (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  employee_id TEXT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+  period_start DATE NOT NULL,
+  period_end DATE NOT NULL,
+  planned_hours NUMERIC(7,2) NOT NULL DEFAULT 0,
+  actual_hours NUMERIC(7,2) NOT NULL DEFAULT 0,
+  overtime_hours NUMERIC(7,2) NOT NULL DEFAULT 0,
+  hourly_rate NUMERIC(10,2) NOT NULL DEFAULT 0,
+  gross_salary NUMERIC(10,2) NOT NULL DEFAULT 0,
+  deductions NUMERIC(10,2) NOT NULL DEFAULT 0,
+  net_salary NUMERIC(10,2) NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'validated', 'paid')),
+  validated_at TIMESTAMPTZ,
+  paid_at TIMESTAMPTZ,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 2.33 expenses
+CREATE TABLE expenses (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  expense_type TEXT NOT NULL DEFAULT 'other',
+  description TEXT NOT NULL DEFAULT '',
+  amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  vat_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+  vat_rate NUMERIC(5,2) NOT NULL DEFAULT 20,
+  date TIMESTAMPTZ NOT NULL DEFAULT now(),
+  supplier_name TEXT NOT NULL DEFAULT '',
+  reference TEXT NOT NULL DEFAULT '',
+  payment_method TEXT NOT NULL DEFAULT 'cash',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'paid', 'rejected')),
+  notes TEXT NOT NULL DEFAULT '',
+  is_deleted BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_employees_company_id ON employees(company_id);
+CREATE INDEX idx_employees_is_deleted ON employees(is_deleted);
+CREATE INDEX idx_employee_schedules_company_id ON employee_schedules(company_id);
+CREATE INDEX idx_employee_schedules_employee_id ON employee_schedules(employee_id);
+CREATE INDEX idx_employee_schedules_week ON employee_schedules(week_start);
+CREATE INDEX idx_payslips_company_id ON payslips(company_id);
+CREATE INDEX idx_payslips_employee_id ON payslips(employee_id);
+CREATE INDEX idx_payslips_status ON payslips(status);
+CREATE INDEX idx_expenses_company_id ON expenses(company_id);
+CREATE INDEX idx_expenses_type ON expenses(expense_type);
+CREATE INDEX idx_expenses_is_deleted ON expenses(is_deleted);
+
+ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
+ALTER TABLE employee_schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payslips ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "employees_select" ON employees FOR SELECT USING (company_id = auth.uid()::text);
+CREATE POLICY "employees_insert" ON employees FOR INSERT WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "employees_update" ON employees FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "employees_delete" ON employees FOR DELETE USING (company_id = auth.uid()::text);
+
+CREATE POLICY "employee_schedules_select" ON employee_schedules FOR SELECT USING (company_id = auth.uid()::text);
+CREATE POLICY "employee_schedules_insert" ON employee_schedules FOR INSERT WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "employee_schedules_update" ON employee_schedules FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "employee_schedules_delete" ON employee_schedules FOR DELETE USING (company_id = auth.uid()::text);
+
+CREATE POLICY "payslips_select" ON payslips FOR SELECT USING (company_id = auth.uid()::text);
+CREATE POLICY "payslips_insert" ON payslips FOR INSERT WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "payslips_update" ON payslips FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "payslips_delete" ON payslips FOR DELETE USING (company_id = auth.uid()::text);
+
+CREATE POLICY "expenses_select" ON expenses FOR SELECT USING (company_id = auth.uid()::text);
+CREATE POLICY "expenses_insert" ON expenses FOR INSERT WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "expenses_update" ON expenses FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "expenses_delete" ON expenses FOR DELETE USING (company_id = auth.uid()::text);
+
+
 -- ========== SECTION 10 : REALTIME ==========
 
 ALTER PUBLICATION supabase_realtime ADD TABLE payments;

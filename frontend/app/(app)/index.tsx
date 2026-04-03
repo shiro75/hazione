@@ -23,7 +23,7 @@
  *   Aucune autre dependance externe necessaire.
  */
 
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, useWindowDimensions,
   TouchableOpacity, Platform, Share, LayoutAnimation,
@@ -51,13 +51,17 @@ import SparklineChart from '@/components/charts/SparklineChart';
 import DonutChart from '@/components/charts/DonutChart';
 import type { DonutSegment } from '@/components/charts/DonutChart';
 import {
-  AreaChart, HorizontalBarChart, WeekHeatmap,
+  AreaChart, HorizontalBarChart,
   TreasuryLineChart, ProjectionBars, ClientDonut,
-  ProgressGauge, LegendRow,
+  LegendRow, HourlyBarChart, SemiCircularGauge,
+  SimpleLineChart, StackedBarChart, WaterfallChart,
+  GroupedBarChart, HorizontalRefBarChart,
 } from '@/components/charts/DashboardCharts';
+import type { StackedBarItem, GroupedBarItem, WaterfallItem } from '@/components/charts/DashboardCharts';
 import { useI18n } from '@/contexts/I18nContext';
 import { SPACING, TYPOGRAPHY, RADIUS, SHADOWS, SEMANTIC_COLORS } from '@/constants/theme';
 import { useConfirm } from '@/contexts/ConfirmContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES ET CONSTANTES
@@ -107,8 +111,14 @@ const PAYMENT_ICONS: Record<string, React.ComponentType<{ size: number; color: s
   twint: Smartphone,
 };
 
-// Objectif CA mensuel par defaut — peut etre rendu configurable via les settings
-const DEFAULT_MONTHLY_TARGET = 1_000_000;
+const DEFAULT_MONTHLY_TARGET = 100_000;
+
+interface SalesObjectives {
+  mode: 'yearly' | 'monthly';
+  yearlyTarget: number;
+  monthlyTargets: Record<string, number>;
+  productTargets: Record<string, number>;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // UTILITAIRES
@@ -232,6 +242,32 @@ export default function DashboardScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const { simplifiedDashboard } = useRole();
 
+  const [salesObjectives, setSalesObjectives] = useState<SalesObjectives | null>(null);
+  const COMPANY_ID = user?.id ?? 'anonymous';
+
+  useEffect(() => {
+    AsyncStorage.getItem(`sales-objectives-${COMPANY_ID}`).then((stored) => {
+      if (stored) {
+        try {
+          setSalesObjectives(JSON.parse(stored) as SalesObjectives);
+        } catch { /* ignore */ }
+      }
+    }).catch(() => {});
+  }, [COMPANY_ID]);
+
+  const monthlyTarget = useMemo(() => {
+    if (!salesObjectives) return DEFAULT_MONTHLY_TARGET;
+    if (salesObjectives.mode === 'yearly') {
+      return salesObjectives.yearlyTarget > 0 ? salesObjectives.yearlyTarget / 12 : DEFAULT_MONTHLY_TARGET;
+    }
+    const currentMonthKey = String(now.getMonth() + 1).padStart(2, '0');
+    const monthVal = salesObjectives.monthlyTargets[currentMonthKey];
+    if (monthVal && monthVal > 0) return monthVal;
+    const total = Object.values(salesObjectives.monthlyTargets).reduce((s, v) => s + v, 0);
+    if (total > 0) return total / 12;
+    return DEFAULT_MONTHLY_TARGET;
+  }, [salesObjectives, now]);
+
   const periodStart = useMemo(() => getPeriodStart(now, period).toISOString(), [now, period]);
   const prevPeriod = useMemo(() => getPreviousPeriodRange(now, period), [now, period]);
 
@@ -281,8 +317,9 @@ export default function DashboardScreen() {
     return invRev + sRev;
   }, [invoices, sales, prevPeriod, paidInvoiceIds]);
 
-  const revenueChange = useMemo(() => {
-    if (prevRevenue === 0) return monthlyRevenue > 0 ? 100 : 0;
+  const revenueChange = useMemo((): number | undefined => {
+    if (prevRevenue === 0 && monthlyRevenue === 0) return 0;
+    if (prevRevenue === 0) return undefined;
     return ((monthlyRevenue - prevRevenue) / prevRevenue) * 100;
   }, [monthlyRevenue, prevRevenue]);
 
@@ -323,13 +360,15 @@ export default function DashboardScreen() {
 
   const prevGrossMargin = prevRevenue - prevExpenses;
 
-  const salesCountChange = useMemo(() => {
-    if (prevSalesCount === 0) return paidSalesCount > 0 ? 100 : 0;
+  const salesCountChange = useMemo((): number | undefined => {
+    if (prevSalesCount === 0 && paidSalesCount === 0) return 0;
+    if (prevSalesCount === 0) return undefined;
     return ((paidSalesCount - prevSalesCount) / prevSalesCount) * 100;
   }, [paidSalesCount, prevSalesCount]);
 
-  const marginChange = useMemo(() => {
-    if (prevGrossMargin === 0) return grossMargin > 0 ? 100 : grossMargin < 0 ? -100 : 0;
+  const marginChange = useMemo((): number | undefined => {
+    if (prevGrossMargin === 0 && grossMargin === 0) return 0;
+    if (prevGrossMargin === 0) return undefined;
     return ((grossMargin - prevGrossMargin) / Math.abs(prevGrossMargin)) * 100;
   }, [grossMargin, prevGrossMargin]);
 
@@ -688,15 +727,19 @@ const salesDetailsByCategory = useMemo(() => {
     };
     sales.filter(s => s.status === 'paid' && s.createdAt >= periodStart).forEach(s => processSale(s.items));
     invoices.filter(i => i.status === 'paid' && i.issueDate >= periodStart).forEach(i => processSale(i.items, true));
-    return Array.from(catMap.entries())
-      .map(([label, { revenue, cost }], idx) => ({ label, value: revenue - cost, color: DONUT_PALETTE[idx % DONUT_PALETTE.length] }))
+    const catEntries = Array.from(catMap.entries());
+    const totalCatRev = catEntries.reduce((s, [, { revenue }]) => s + revenue, 0);
+    return catEntries
+      .map(([label, { revenue, cost }], idx) => {
+        const pct = totalCatRev > 0 ? Math.round((revenue / totalCatRev) * 100) : 0;
+        return { label: `${label} · ${pct}%`, value: revenue - cost, color: DONUT_PALETTE[idx % DONUT_PALETTE.length] };
+      })
       .sort((a, b) => b.value - a.value)
       .slice(0, 6);
   }, [sales, invoices, activeProducts, periodStart]);
 
   /** Heatmap activite par jour de semaine — nombre de ventes par tranche horaire */
-  const weekHeatmapData = useMemo(() => {
-    // 7 jours x 4 tranches : matin (6-12h), midi (12-14h), apres-midi (14-18h), soir (18-24h)
+  const _weekHeatmapData = useMemo(() => {
     const matrix: number[][] = Array.from({ length: 7 }, () => [0, 0, 0, 0]);
     const allSalesItems = [
       ...sales.filter(s => s.status === 'paid').map(s => s.createdAt),
@@ -704,13 +747,30 @@ const salesDetailsByCategory = useMemo(() => {
     ];
     for (const dateStr of allSalesItems) {
       const d = new Date(dateStr);
-      const dayIdx = (d.getDay() + 6) % 7; // Lundi = 0
+      const dayIdx = (d.getDay() + 6) % 7;
       const h = d.getHours();
       const slotIdx = h < 12 ? 0 : h < 14 ? 1 : h < 18 ? 2 : 3;
       matrix[dayIdx][slotIdx]++;
     }
     return matrix;
   }, [sales, invoices]);
+
+  const [hourlyDayFilter, setHourlyDayFilter] = useState<number | null>(null);
+
+  const hourlyBarData = useMemo(() => {
+    const hourCounts: number[] = Array(24).fill(0);
+    const allDates = [
+      ...sales.filter(s => s.status === 'paid').map(s => s.createdAt),
+      ...invoices.filter(i => i.status === 'paid').map(i => i.issueDate),
+    ];
+    for (const dateStr of allDates) {
+      const d = new Date(dateStr);
+      const dayIdx = (d.getDay() + 6) % 7;
+      if (hourlyDayFilter !== null && dayIdx !== hourlyDayFilter) continue;
+      hourCounts[d.getHours()]++;
+    }
+    return hourCounts;
+  }, [sales, invoices, hourlyDayFilter]);
 
   /** Repartition clients nouveaux vs recurrents */
   const clientRecurrence = useMemo(() => {
@@ -738,16 +798,278 @@ const salesDetailsByCategory = useMemo(() => {
 
   /** Top 5 produits */
   const topProducts = useMemo(() => {
-    const productMap = new Map<string, { name: string; qty: number; ca: number }>();
+    const productMap = new Map<string, { name: string; qty: number; ca: number; cost: number }>();
     const record = (id: string, name: string, qty: number, total: number) => {
-      const ex = productMap.get(id) || { name, qty: 0, ca: 0 };
+      const ex = productMap.get(id) || { name, qty: 0, ca: 0, cost: 0 };
       ex.qty += qty; ex.ca += total;
+      const product = activeProducts.find(p => p.id === id);
+      ex.cost += (product?.purchasePrice || 0) * qty;
       productMap.set(id, ex);
     };
     sales.filter(s => s.status === 'paid').forEach(s => s.items.forEach(i => record(i.productId, i.productName, i.quantity, i.totalTTC)));
     invoices.filter(i => i.status === 'paid').forEach(inv => inv.items.forEach(i => record(i.productId, i.productName, i.quantity, i.totalTTC)));
     return Array.from(productMap.values()).sort((a, b) => b.ca - a.ca).slice(0, 5);
-  }, [sales, invoices]);
+  }, [sales, invoices, activeProducts]);
+
+  const allProducts = useMemo(() => {
+    const productMap = new Map<string, { name: string; qty: number; ca: number; cost: number; category: string }>();
+    const record = (id: string, name: string, qty: number, total: number) => {
+      const ex = productMap.get(id) || { name, qty: 0, ca: 0, cost: 0, category: '' };
+      ex.qty += qty; ex.ca += total;
+      const product = activeProducts.find(p => p.id === id);
+      ex.cost += (product?.purchasePrice || 0) * qty;
+      ex.category = product?.categoryName || 'Autres';
+      productMap.set(id, ex);
+    };
+    sales.filter(s => s.status === 'paid').forEach(s => s.items.forEach(i => record(i.productId, i.productName, i.quantity, i.totalTTC)));
+    invoices.filter(i => i.status === 'paid').forEach(inv => inv.items.forEach(i => record(i.productId, i.productName, i.quantity, i.totalTTC)));
+    return Array.from(productMap.values()).sort((a, b) => b.ca - a.ca);
+  }, [sales, invoices, activeProducts]);
+
+  const abcClassification = useMemo(() => {
+    const totalCA = allProducts.reduce((s, p) => s + p.ca, 0);
+    if (totalCA === 0) return [];
+    let cumulative = 0;
+    return allProducts.map(p => {
+      cumulative += p.ca;
+      const pctCA = (p.ca / totalCA) * 100;
+      const cumulPct = (cumulative / totalCA) * 100;
+      const abc: 'A' | 'B' | 'C' = cumulPct <= 80 ? 'A' : cumulPct <= 95 ? 'B' : 'C';
+      const margin = p.ca - p.cost;
+      return { ...p, pctCA, abc, margin };
+    });
+  }, [allProducts]);
+
+  const avgBasketEvolution = useMemo(() => {
+    const convertedIds = new Set(sales.filter(s => s.convertedToInvoiceId).map(s => s.convertedToInvoiceId!));
+    const loc = locale === 'en' ? 'en-US' : 'fr-FR';
+    const useWeeks = period === 'month' || period === 'week';
+    const nbPeriods = useWeeks ? 6 : 6;
+    return Array.from({ length: nbPeriods }, (_, i) => {
+      let start: Date, end: Date, label: string;
+      if (useWeeks) {
+        end = new Date(now); end.setDate(end.getDate() - ((nbPeriods - 1 - i) * 7));
+        start = new Date(end); start.setDate(start.getDate() - 7);
+        label = `S${Math.ceil((end.getTime() - new Date(end.getFullYear(), 0, 1).getTime()) / (7 * 86400000))}`;
+      } else {
+        start = new Date(now.getFullYear(), now.getMonth() - (nbPeriods - 1 - i), 1);
+        end = new Date(now.getFullYear(), now.getMonth() - (nbPeriods - 1 - i) + 1, 1);
+        label = start.toLocaleDateString(loc, { month: 'short' }).replace('.', '');
+      }
+      const sISO = start.toISOString(); const eISO = end.toISOString();
+      const invRev = invoices.filter(inv => inv.status === 'paid' && inv.issueDate >= sISO && inv.issueDate < eISO).reduce((s2, inv) => s2 + inv.totalTTC, 0);
+      const saleRev = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= sISO && s2.createdAt < eISO && (!s2.convertedToInvoiceId || !convertedIds.has(s2.convertedToInvoiceId))).reduce((s3, sale) => s3 + sale.totalTTC, 0);
+      const invCount = invoices.filter(inv => inv.status === 'paid' && inv.issueDate >= sISO && inv.issueDate < eISO).length;
+      const saleCount = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= sISO && s2.createdAt < eISO).length;
+      const totalRev = invRev + saleRev;
+      const totalCount = invCount + saleCount;
+      return { label, value: totalCount > 0 ? totalRev / totalCount : 0 };
+    });
+  }, [invoices, sales, now, period, locale]);
+
+  const currentAvgBasket = useMemo(() => {
+    const vals = avgBasketEvolution.filter(v => v.value > 0);
+    return vals.length > 0 ? vals[vals.length - 1].value : 0;
+  }, [avgBasketEvolution]);
+
+  const prevAvgBasket = useMemo(() => {
+    const vals = avgBasketEvolution.filter(v => v.value > 0);
+    return vals.length > 1 ? vals[vals.length - 2].value : 0;
+  }, [avgBasketEvolution]);
+
+  const avgBasketChange = useMemo((): number | undefined => {
+    if (prevAvgBasket === 0 && currentAvgBasket === 0) return 0;
+    if (prevAvgBasket === 0) return undefined;
+    return ((currentAvgBasket - prevAvgBasket) / prevAvgBasket) * 100;
+  }, [currentAvgBasket, prevAvgBasket]);
+
+  const netMarginEvolution = useMemo(() => {
+    const convertedIds = new Set(sales.filter(s => s.convertedToInvoiceId).map(s => s.convertedToInvoiceId!));
+    const nbMonths = 12;
+    return Array.from({ length: nbMonths }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (nbMonths - 1 - i), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - (nbMonths - 1 - i) + 1, 1);
+      const label = d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+      const dISO = d.toISOString(); const eISO = end.toISOString();
+      const invRev = invoices.filter(inv => inv.status === 'paid' && inv.issueDate >= dISO && inv.issueDate < eISO).reduce((s, inv) => s + inv.totalTTC, 0);
+      const saleRev = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= dISO && s2.createdAt < eISO && (!s2.convertedToInvoiceId || !convertedIds.has(s2.convertedToInvoiceId))).reduce((s3, sale) => s3 + sale.totalTTC, 0);
+      const exp = activeSupplierInvoices.filter(si => si.date >= dISO && si.date < eISO).reduce((s, si) => s + (si.total || 0), 0);
+      const cashExp = cashMovements.filter(cm => cm.type === 'expense' && cm.date >= dISO && cm.date < eISO && !cm.sourceType).reduce((s, cm) => s + cm.amount, 0);
+      return { label, value: invRev + saleRev - exp - cashExp };
+    });
+  }, [invoices, sales, activeSupplierInvoices, cashMovements, now]);
+
+  const clientLoyaltyData = useMemo((): StackedBarItem[] => {
+    const nbMonths = 6;
+    const clientFirstPurchase: Record<string, string> = {};
+    const clientLastPurchase: Record<string, string> = {};
+    const allTransactions: { clientKey: string; date: string }[] = [];
+    sales.filter(s => s.status === 'paid').forEach(s => {
+      const key = s.clientId || s.clientName || 'inconnu';
+      allTransactions.push({ clientKey: key, date: s.createdAt });
+    });
+    invoices.filter(i => i.status === 'paid').forEach(i => {
+      const key = i.clientId || i.clientName || 'inconnu';
+      allTransactions.push({ clientKey: key, date: i.issueDate });
+    });
+    for (const tx of allTransactions) {
+      if (!clientFirstPurchase[tx.clientKey] || tx.date < clientFirstPurchase[tx.clientKey]) {
+        clientFirstPurchase[tx.clientKey] = tx.date;
+      }
+      if (!clientLastPurchase[tx.clientKey] || tx.date > clientLastPurchase[tx.clientKey]) {
+        clientLastPurchase[tx.clientKey] = tx.date;
+      }
+    }
+
+    return Array.from({ length: nbMonths }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (nbMonths - 1 - i), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - (nbMonths - 1 - i) + 1, 1);
+      const label = d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+      const dISO = d.toISOString(); const eISO = end.toISOString();
+      const thirtyDaysBefore = new Date(d); thirtyDaysBefore.setDate(thirtyDaysBefore.getDate() - 30);
+      const thirtyISO = thirtyDaysBefore.toISOString();
+
+      let newClients = 0;
+      let recurringClients = 0;
+      let inactiveClients = 0;
+      const activeThisMonth = new Set<string>();
+
+      for (const tx of allTransactions) {
+        if (tx.date >= dISO && tx.date < eISO) {
+          activeThisMonth.add(tx.clientKey);
+        }
+      }
+
+      for (const key of activeThisMonth) {
+        const firstDate = clientFirstPurchase[key];
+        if (firstDate >= dISO && firstDate < eISO) {
+          newClients++;
+        } else {
+          recurringClients++;
+        }
+      }
+
+      for (const key of Object.keys(clientLastPurchase)) {
+        if (!activeThisMonth.has(key) && clientLastPurchase[key] < dISO && clientLastPurchase[key] >= thirtyISO) {
+          inactiveClients++;
+        }
+      }
+
+      return {
+        label,
+        segments: [
+          { value: newClients, color: '#6366F1', label: 'Nouveaux' },
+          { value: recurringClients, color: '#10B981', label: 'Récurrents' },
+          { value: inactiveClients, color: '#9CA3AF', label: 'Inactifs' },
+        ],
+      };
+    });
+  }, [sales, invoices, now]);
+
+  const loyaltyRate = useMemo(() => {
+    const total = clientRecurrence.newCount + clientRecurrence.recurringCount;
+    return total > 0 ? Math.round((clientRecurrence.recurringCount / total) * 100) : 0;
+  }, [clientRecurrence]);
+
+  const nVsN1Data = useMemo((): GroupedBarItem[] => {
+    const convertedIds = new Set(sales.filter(s => s.convertedToInvoiceId).map(s => s.convertedToInvoiceId!));
+    const thisYear = now.getFullYear();
+    const calcRevForMonth = (year: number, month: number) => {
+      const start = new Date(year, month, 1);
+      const end = new Date(year, month + 1, 1);
+      const sISO = start.toISOString(); const eISO = end.toISOString();
+      const invRev = invoices.filter(inv => inv.status === 'paid' && inv.issueDate >= sISO && inv.issueDate < eISO).reduce((s, inv) => s + inv.totalTTC, 0);
+      const saleRev = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= sISO && s2.createdAt < eISO && (!s2.convertedToInvoiceId || !convertedIds.has(s2.convertedToInvoiceId))).reduce((s3, sale) => s3 + sale.totalTTC, 0);
+      return invRev + saleRev;
+    };
+    return Array.from({ length: 12 }, (_, m) => {
+      const label = new Date(thisYear, m, 1).toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+      const valueA = calcRevForMonth(thisYear, m);
+      const valueB = calcRevForMonth(thisYear - 1, m);
+      const change = valueB > 0 ? ((valueA - valueB) / valueB) * 100 : undefined;
+      return { label, valueA, valueB, change };
+    });
+  }, [invoices, sales, now]);
+
+  const hasN1Data = useMemo(() => nVsN1Data.some(d => d.valueB > 0), [nVsN1Data]);
+
+  const breakEvenLine = useMemo(() => {
+    const totalFixedCosts = cashMovements.filter(cm => cm.type === 'expense' && !cm.sourceType).reduce((s, cm) => s + cm.amount, 0) / Math.max(1, 6);
+    const totalRevenue = sixMonthsData.reduce((s, m) => s + m.revenue, 0);
+    const totalExpenses = sixMonthsData.reduce((s, m) => s + m.expenses, 0);
+    const marginRate = totalRevenue > 0 ? (totalRevenue - totalExpenses) / totalRevenue : 0;
+    return marginRate > 0 ? totalFixedCosts / marginRate : 0;
+  }, [cashMovements, sixMonthsData]);
+
+  const waterfallData = useMemo((): WaterfallItem[] => {
+    const supplierCosts = activeSupplierInvoices
+      .filter(si => si.date >= periodStart)
+      .reduce((s, si) => s + (si.total || 0), 0);
+    const fixedCharges = cashMovements
+      .filter(cm => cm.type === 'expense' && !cm.sourceType && cm.date >= periodStart)
+      .reduce((s, cm) => s + cm.amount, 0);
+    const netResult = monthlyRevenue - supplierCosts - fixedCharges;
+    return [
+      { label: 'CA encaissé', value: monthlyRevenue, type: 'positive' as const },
+      { label: 'Fournisseurs', value: supplierCosts, type: 'negative' as const },
+      { label: 'Charges fixes', value: fixedCharges, type: 'negative' as const },
+      { label: 'Résultat', value: netResult, type: 'total' as const },
+    ];
+  }, [monthlyRevenue, activeSupplierInvoices, cashMovements, periodStart]);
+
+  const paymentDelayData = useMemo(() => {
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const end = new Date(now.getFullYear(), now.getMonth() - (5 - i) + 1, 1);
+      const label = d.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '');
+      const dISO = d.toISOString();
+      const eISO = end.toISOString();
+      const paidInMonth = invoices.filter(inv => inv.status === 'paid' && inv.issueDate >= dISO && inv.issueDate < eISO);
+      if (paidInMonth.length === 0) return { label, value: 0 };
+      const totalDays = paidInMonth.reduce((sum, inv) => {
+        const issued = new Date(inv.issueDate).getTime();
+        const due = new Date(inv.dueDate).getTime();
+        return sum + Math.max(0, (due - issued) / 86400000);
+      }, 0);
+      return { label, value: totalDays / paidInMonth.length };
+    });
+  }, [invoices, now]);
+
+  const avgPaymentDelay = useMemo(() => {
+    const vals = paymentDelayData.filter(d => d.value > 0);
+    return vals.length > 0 ? Math.round(vals.reduce((s, d) => s + d.value, 0) / vals.length) : 0;
+  }, [paymentDelayData]);
+
+  const expenseBreakdownSegments = useMemo((): DonutSegment[] => {
+    const supplierTotal = activeSupplierInvoices
+      .filter(si => si.date >= periodStart)
+      .reduce((s, si) => s + (si.total || 0), 0);
+    const fixedCharges = cashMovements
+      .filter(cm => cm.type === 'expense' && !cm.sourceType && cm.date >= periodStart)
+      .reduce((s, cm) => s + cm.amount, 0);
+    const segments: DonutSegment[] = [];
+    if (supplierTotal > 0) segments.push({ label: 'Matières premières', value: supplierTotal, color: '#6366F1' });
+    if (fixedCharges > 0) segments.push({ label: 'Charges fixes', value: fixedCharges, color: '#F59E0B' });
+    return segments;
+  }, [activeSupplierInvoices, cashMovements, periodStart]);
+
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date>(new Date());
+  const refreshMinutesAgo = useMemo(() => {
+    return Math.floor((now.getTime() - lastRefreshTime.getTime()) / 60000);
+  }, [now, lastRefreshTime]);
+
+  const globalHealthStatus = useMemo((): 'green' | 'orange' | 'red' => {
+    const bal = cashMovements.length === 0 ? 0 : cashMovements.reduce((b, cm) => cm.type === 'income' ? b + cm.amount : b - cm.amount, 0);
+    if (bal < 0) return 'red';
+    const veryLateInvoices = invoices.filter(i => {
+      if (i.status !== 'sent' && i.status !== 'late') return false;
+      const daysLate = Math.floor((now.getTime() - new Date(i.dueDate).getTime()) / 86400000);
+      return daysLate > 30;
+    });
+    if (veryLateInvoices.length > 0) return 'red';
+    if (lowStockProducts.length > 0 || unpaidInvoices.length > 0) return 'orange';
+    return 'green';
+  }, [cashMovements, invoices, now, lowStockProducts, unpaidInvoices]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DONNEES ONGLET TRESORERIE
@@ -793,6 +1115,16 @@ const salesDetailsByCategory = useMemo(() => {
     paidSupplierInvoicesTreasury.reduce((s, si) => s + (si.total || 0), 0) + refundedSalesTreasury.reduce((s, sale) => s + sale.totalTTC, 0),
     [paidSupplierInvoicesTreasury, refundedSalesTreasury]
   );
+
+  const supplierInvoicesToPayTreasury = useMemo(() =>
+    activeSupplierInvoices.filter(si => si.status === 'to_pay' || si.status === 'received' || si.status === 'late'),
+    [activeSupplierInvoices]
+  );
+  const totalSupplierToPay = useMemo(() =>
+    supplierInvoicesToPayTreasury.reduce((s, si) => s + (si.total || 0), 0),
+    [supplierInvoicesToPayTreasury]
+  );
+  const totalDecaissementsWithPlanned = totalDecaissements + totalSupplierToPay;
 
   /** Sparkline solde cumule sur 6 mois */
   const treasurySparkline = useMemo(() => {
@@ -869,10 +1201,10 @@ const salesDetailsByCategory = useMemo(() => {
 
   const allMovements = useMemo((): RealMovement[] => {
     const moves: RealMovement[] = [];
-    for (const inv of paidInvoicesTreasury) moves.push({ id: `inv-${inv.id}`, type: 'income', amount: inv.totalTTC, description: `Facture ${inv.invoiceNumber} \u2014 ${clientMap[inv.clientId] || inv.clientName}`, date: inv.issueDate, source: 'Facture client' });
-    for (const sale of salesNotFromInvoicesTreasury) moves.push({ id: `sale-${sale.id}`, type: 'income', amount: sale.totalTTC, description: `Vente ${sale.saleNumber}${sale.clientName ? ` \u2014 ${sale.clientName}` : ''}`, date: sale.createdAt, source: 'Vente comptoir' });
+    for (const inv of paidInvoicesTreasury) moves.push({ id: `inv-${inv.id}`, type: 'income', amount: inv.totalTTC, description: `Facture ${inv.invoiceNumber} — ${clientMap[inv.clientId] || inv.clientName}`, date: inv.issueDate, source: 'Facture client' });
+    for (const sale of salesNotFromInvoicesTreasury) moves.push({ id: `sale-${sale.id}`, type: 'income', amount: sale.totalTTC, description: `Vente ${sale.saleNumber}${sale.clientName ? ` — ${sale.clientName}` : ''}`, date: sale.createdAt, source: 'Vente comptoir' });
     for (const sale of refundedSalesTreasury) moves.push({ id: `refund-${sale.id}`, type: 'expense', amount: sale.totalTTC, description: `Remboursement ${sale.saleNumber}`, date: sale.refundedAt || sale.createdAt, source: 'Remboursement' });
-    for (const si of paidSupplierInvoicesTreasury) moves.push({ id: `si-${si.id}`, type: 'expense', amount: si.total || 0, description: `Facture ${si.number} \u2014 ${si.supplierName || 'Fournisseur'}`, date: si.date, source: 'Facture fournisseur' });
+    for (const si of paidSupplierInvoicesTreasury) moves.push({ id: `si-${si.id}`, type: 'expense', amount: si.total || 0, description: `Facture ${si.number} — ${si.supplierName || 'Fournisseur'}`, date: si.date, source: 'Facture fournisseur' });
     moves.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     return moves;
   }, [paidInvoicesTreasury, paidSupplierInvoicesTreasury, clientMap, salesNotFromInvoicesTreasury, refundedSalesTreasury]);
@@ -1135,26 +1467,26 @@ const salesDetailsByCategory = useMemo(() => {
 
   const renderOverviewTab = () => (
     <>
-      {/* Today banner + Objectif CA side by side */}
-      <View style={[styles.todayAndTargetRow, isMobile && styles.todayAndTargetRowMobile && styles.kpiRowCompact]}>
+      {/* KPI cards row */}
+      <View style={[styles.kpiRowCompact]}>
         {renderTodayBanner()}
-        <View style={[styles.card, styles.targetCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-          <ProgressGauge
+        <View style={[styles.card, styles.targetCard, { backgroundColor: colors.card, borderColor: colors.cardBorder, padding: SPACING.LG }]}>
+          <SemiCircularGauge
             current={monthlyRevenue}
-            target={DEFAULT_MONTHLY_TARGET}
+            target={monthlyTarget}
+            size={isMobile ? 120 : 130}
             color={colors.primary}
             bgColor={colors.borderLight}
-            label="Objectif CA mensuel"
+            label="Objectif CA"
             formatValue={(v) => formatCurrencyInteger(v, cur)}
             textColor={colors.text}
             subtextColor={colors.textSecondary}
           />
         </View>
-        <View style={styles.kpiRowCompact}>
         <KPICard
           title={t('dashboard.monthlyRevenue')}
           value={formatCurrencyInteger(monthlyRevenue, cur)}
-          change={Math.round(revenueChange * 10) / 10}
+          change={revenueChange !== undefined ? Math.round(revenueChange * 10) / 10 : undefined}
           icon={<TrendingUp size={15} color={colors.primary} />}
           onPress={() => router.push('/ventes')}
           sparklineData={revenueSparkline}
@@ -1185,11 +1517,22 @@ const salesDetailsByCategory = useMemo(() => {
           onPress={() => router.push('/ventes')}
         />
       </View>
-      </View>
       
       {renderActionCards()}
 
-
+      {grossMargin < 0 && (
+        <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: SPACING.MD, backgroundColor: '#FEF2F2', borderColor: '#FECACA', borderWidth: 1, borderRadius: RADIUS.LG, padding: SPACING.LG }}>
+          <AlertTriangle size={18} color="#DC2626" />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: '600' as const, color: '#DC2626' }}>
+              Votre bénéfice brut est négatif sur cette période.
+            </Text>
+            <Text style={{ fontSize: TYPOGRAPHY.SIZE.CAPTION, color: '#991B1B', marginTop: 2 }}>
+              Consultez vos dépenses pour identifier les postes à réduire.
+            </Text>
+          </View>
+        </View>
+      )}
 
       {selectedCategory && (
         <TouchableOpacity
@@ -1329,6 +1672,60 @@ const salesDetailsByCategory = useMemo(() => {
         )}
       </View>
 
+      {/* Activite par heure */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={styles.cardHeaderRow}>
+          <View>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Activité par heure</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Identifiez vos heures de pointe</Text>
+          </View>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.XS, marginBottom: SPACING.MD }}>
+          <TouchableOpacity
+            style={[styles.periodPill, { backgroundColor: hourlyDayFilter === null ? colors.primary : colors.card, borderColor: hourlyDayFilter === null ? colors.primary : colors.cardBorder }]}
+            onPress={() => setHourlyDayFilter(null)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.periodText, { color: hourlyDayFilter === null ? '#fff' : colors.textSecondary }]}>Tous</Text>
+          </TouchableOpacity>
+          {(locale === 'en'
+            ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            : ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
+          ).map((day, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={[styles.periodPill, { backgroundColor: hourlyDayFilter === idx ? colors.primary : colors.card, borderColor: hourlyDayFilter === idx ? colors.primary : colors.cardBorder }]}
+              onPress={() => setHourlyDayFilter(prev => prev === idx ? null : idx)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.periodText, { color: hourlyDayFilter === idx ? '#fff' : colors.textSecondary }]}>{day}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {hourlyBarData.every(v => v === 0) ? (
+          <View style={styles.emptyChart}>
+            <BarChart3 size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune vente enregistrée</Text>
+          </View>
+        ) : hourlyBarData.reduce((s, v) => s + v, 0) < 5 ? (
+          <View style={styles.emptyChart}>
+            <BarChart3 size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Données insuffisantes</Text>
+            <Text style={[styles.emptyChartHint, { color: colors.textTertiary }]}>Moins de 5 ventes enregistrées — le graphique sera plus pertinent avec davantage de données.</Text>
+          </View>
+        ) : (
+          <HourlyBarChart
+            data={hourlyBarData}
+            startHour={6}
+            endHour={22}
+            primaryColor={colors.primary}
+            textColor={colors.textSecondary}
+            bgColor={colors.borderLight}
+            barMaxHeight={120}
+          />
+        )}
+      </View>
+
       {/* 5 dernieres ventes */}
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <View style={styles.cardHeaderRow}>
@@ -1367,9 +1764,43 @@ const salesDetailsByCategory = useMemo(() => {
         </View>
       </View>
 
-      {/* Comparaison avec periode precedente */}
+      {/* Évolution de la marge nette */}
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <Text style={[styles.cardTitle, { color: colors.text }]}>{t('dashboard.comparisonPrevious')}</Text>
+        <View style={styles.cardHeaderRow}>
+          <View>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Évolution de la marge nette</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Visualisez vos bénéfices et pertes sur 12 mois</Text>
+          </View>
+        </View>
+        {netMarginEvolution.every(m => m.value === 0) ? (
+          <View style={styles.emptyChart}>
+            <TrendingUp size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Données insuffisantes pour calculer la marge nette</Text>
+            <TouchableOpacity onPress={() => router.push('/ventes')} style={[styles.emptyActionBtn, { backgroundColor: colors.primary }]}>
+              <Text style={styles.emptyActionBtnText}>Créer une vente</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <SimpleLineChart
+            data={netMarginEvolution}
+            width={isMobile ? width - 80 : 460}
+            height={200}
+            color="#059669"
+            textColor={colors.textTertiary}
+            showArea={true}
+            referenceLine={0}
+            referenceLabel="Seuil 0 €"
+            referenceColor="#EF4444"
+            positiveColor="#059669"
+            negativeColor="#EF4444"
+          />
+        )}
+      </View>
+
+      {/* Comparaison avec la période précédente */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <Text style={[styles.cardTitle, { color: colors.text }]}>Comparaison avec la période précédente</Text>
+        <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Identifiez les tendances par rapport à la période précédente</Text>
         <View style={[styles.comparisonRow, isMobile && styles.comparisonRowMobile]}>
           {[
             { label: t('dashboard.revenue'), value: monthlyRevenue, prev: prevRevenue, change: revenueChange, sparkline: revenueSparkline },
@@ -1380,12 +1811,18 @@ const salesDetailsByCategory = useMemo(() => {
               <Text style={[styles.comparisonLabel, { color: colors.textSecondary }]}>{label}</Text>
               <Text style={[styles.comparisonValue, { color: colors.text }]}>{isCount ? String(value) : formatCurrencyInteger(value as number, cur)}</Text>
               <Text style={[styles.comparisonPrev, { color: colors.textTertiary }]}>{t('dashboard.vs')} {isCount ? String(prev) : formatCurrencyInteger(prev as number, cur)}</Text>
-              <View style={[styles.comparisonBadge, { backgroundColor: change >= 0 ? '#ECFDF5' : '#FEF2F2' }]}>
-                {change >= 0 ? <ArrowUpRight size={12} color="#059669" /> : <ArrowDownRight size={12} color="#DC2626" />}
-                <Text style={{ fontSize: 11, fontWeight: '700', color: change >= 0 ? '#059669' : '#DC2626' }}>{change >= 0 ? '+' : ''}{Math.round(change)}%</Text>
-              </View>
+              {change !== undefined ? (
+                <View style={[styles.comparisonBadge, { backgroundColor: change >= 0 ? '#ECFDF5' : '#FEF2F2' }]}>
+                  {change >= 0 ? <ArrowUpRight size={12} color="#059669" /> : <ArrowDownRight size={12} color="#DC2626" />}
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: change >= 0 ? '#059669' : '#DC2626' }}>{change >= 0 ? '+' : ''}{Math.round(change)}%</Text>
+                </View>
+              ) : (
+                <View style={[styles.comparisonBadge, { backgroundColor: colors.borderLight }]}>
+                  <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.textTertiary }}>Données insuffisantes</Text>
+                </View>
+              )}
               <View style={styles.comparisonSparkline}>
-                <SparklineChart data={sparkline} color={change >= 0 ? '#059669' : '#DC2626'} width={90} height={22} />
+                <SparklineChart data={sparkline} color={(change ?? 0) >= 0 ? '#059669' : '#DC2626'} width={90} height={22} />
               </View>
             </View>
           ))}
@@ -1396,13 +1833,13 @@ const salesDetailsByCategory = useMemo(() => {
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <View style={styles.cardHeaderRow}>
           <View>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>CA vs Depenses</Text>
-            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>{t('dashboard.last6Months')}</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>CA vs Dépenses</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Comparez vos revenus et dépenses sur 6 mois</Text>
           </View>
           <LegendRow
             items={[
               { color: '#6366F1', label: 'CA' },
-              { color: '#EF4444', label: 'Depenses' },
+              { color: '#EF4444', label: 'Dépenses' },
             ]}
             textColor={colors.textSecondary}
           />
@@ -1410,7 +1847,7 @@ const salesDetailsByCategory = useMemo(() => {
         {sixMonthsData.every(m => m.revenue === 0 && m.expenses === 0) ? (
           <View style={styles.emptyChart}>
             <TrendingUp size={28} color={colors.textTertiary} />
-            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune donnee disponible pour cette periode.</Text>
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune donnée disponible pour cette période.</Text>
           </View>
         ) : (
           <AreaChart
@@ -1424,18 +1861,25 @@ const salesDetailsByCategory = useMemo(() => {
             textColor={colors.textTertiary}
           />
         )}
+        {breakEvenLine > 0 && (
+          <View style={[styles.breakEvenNote, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]}>
+            <Text style={{ fontSize: 11, fontWeight: '600' as const, color: '#DC2626' }}>
+              Seuil de rentabilité : {formatCurrencyInteger(breakEvenLine, cur)} / mois
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Bar chart horizontal Marge par categorie + Donut clients */}
       <View style={[styles.chartsRow, isMobile && styles.chartsRowMobile]}>
         <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Marge par categorie</Text>
-          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Periode selectionnee</Text>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Marge par catégorie</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Rentabilité de chaque catégorie de produit</Text>
           <View style={{ marginTop: SPACING.LG }}>
             {marginByCategory.length === 0 ? (
               <View style={styles.emptyChart}>
                 <BarChart3 size={24} color={colors.textTertiary} />
-                <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune donnee</Text>
+                <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune donnée</Text>
               </View>
             ) : (
               <HorizontalBarChart
@@ -1460,40 +1904,114 @@ const salesDetailsByCategory = useMemo(() => {
               <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucun client enregistre</Text>
             </View>
           ) : (
-            <ClientDonut
-              newCount={clientRecurrence.newCount}
-              recurringCount={clientRecurrence.recurringCount}
-              colorNew="#6366F1"
-              colorRecurring="#10B981"
-              textColor={colors.text}
-              labelColor={colors.textSecondary}
-            />
+            <>
+              <ClientDonut
+                newCount={clientRecurrence.newCount}
+                recurringCount={clientRecurrence.recurringCount}
+                colorNew="#6366F1"
+                colorRecurring="#10B981"
+                textColor={colors.text}
+                labelColor={colors.textSecondary}
+              />
+              <Text style={{ fontSize: 12, color: colors.textSecondary, textAlign: 'center' as const, marginTop: SPACING.MD }}>
+                {clientRecurrence.newCount + clientRecurrence.recurringCount} clients ont commandé sur cette période
+              </Text>
+            </>
           )}
         </View>
       </View>
 
-      {/* Heatmap jours de la semaine */}
+      {/* Fidélité et rétention clients */}
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <View style={styles.cardHeaderRow}>
           <View>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Activite par jour</Text>
-            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Jours les plus actifs en ventes</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Fidélité et rétention clients</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Suivez l'évolution de votre base clients sur 6 mois</Text>
+          </View>
+          <View style={[styles.loyaltyKpiBadge, { backgroundColor: loyaltyRate >= 50 ? '#ECFDF5' : '#FEF3C7' }]}>
+            <Text style={{ fontSize: 11, fontWeight: '700' as const, color: loyaltyRate >= 50 ? '#059669' : '#D97706' }}>
+              Fidélité : {loyaltyRate}%
+            </Text>
           </View>
         </View>
-        {weekHeatmapData.every(row => row.every(v => v === 0)) ? (
+        {clientLoyaltyData.every(d => d.segments.every(s => s.value === 0)) ? (
           <View style={styles.emptyChart}>
-            <BarChart3 size={28} color={colors.textTertiary} />
-            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune vente enregistree</Text>
+            <Users size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Pas assez de données clients</Text>
           </View>
         ) : (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <WeekHeatmap
-              data={weekHeatmapData}
-              primaryColor={colors.primary}
-              textColor={colors.textSecondary}
-              bgColor={colors.borderLight}
+          <>
+            <StackedBarChart
+              data={clientLoyaltyData}
+              width={isMobile ? width - 80 : 460}
+              height={160}
+              textColor={colors.textTertiary}
             />
-          </ScrollView>
+            <View style={{ marginTop: SPACING.MD }}>
+              <LegendRow
+                items={[
+                  { color: '#6366F1', label: 'Nouveaux' },
+                  { color: '#10B981', label: 'Récurrents' },
+                  { color: '#9CA3AF', label: 'Inactifs (+30j)' },
+                ]}
+                textColor={colors.textSecondary}
+              />
+            </View>
+          </>
+        )}
+      </View>
+
+      {/* Activite par heure */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={styles.cardHeaderRow}>
+          <View>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Activité par heure</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Identifiez vos heures de pointe</Text>
+          </View>
+        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: SPACING.XS, marginBottom: SPACING.MD }}>
+          <TouchableOpacity
+            style={[styles.periodPill, { backgroundColor: hourlyDayFilter === null ? colors.primary : colors.card, borderColor: hourlyDayFilter === null ? colors.primary : colors.cardBorder }]}
+            onPress={() => setHourlyDayFilter(null)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.periodText, { color: hourlyDayFilter === null ? '#fff' : colors.textSecondary }]}>Tous</Text>
+          </TouchableOpacity>
+          {(locale === 'en'
+            ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+            : ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim']
+          ).map((day, idx) => (
+            <TouchableOpacity
+              key={idx}
+              style={[styles.periodPill, { backgroundColor: hourlyDayFilter === idx ? colors.primary : colors.card, borderColor: hourlyDayFilter === idx ? colors.primary : colors.cardBorder }]}
+              onPress={() => setHourlyDayFilter(prev => prev === idx ? null : idx)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.periodText, { color: hourlyDayFilter === idx ? '#fff' : colors.textSecondary }]}>{day}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {hourlyBarData.every(v => v === 0) ? (
+          <View style={styles.emptyChart}>
+            <BarChart3 size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune vente enregistrée</Text>
+          </View>
+        ) : hourlyBarData.reduce((s, v) => s + v, 0) < 5 ? (
+          <View style={styles.emptyChart}>
+            <BarChart3 size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Données insuffisantes</Text>
+            <Text style={[styles.emptyChartHint, { color: colors.textTertiary }]}>Moins de 5 ventes enregistrées — le graphique sera plus pertinent avec davantage de données.</Text>
+          </View>
+        ) : (
+          <HourlyBarChart
+            data={hourlyBarData}
+            startHour={6}
+            endHour={22}
+            primaryColor={colors.primary}
+            textColor={colors.textSecondary}
+            bgColor={colors.borderLight}
+            barMaxHeight={120}
+          />
         )}
       </View>
 
@@ -1509,23 +2027,139 @@ const salesDetailsByCategory = useMemo(() => {
           <View style={styles.tableContent}>
             <View style={[styles.tableRowHeader, { borderBottomColor: colors.border }]}>
               <Text style={[styles.thCell, { color: colors.textTertiary, flex: 2 }]}>{t('dashboard.product')}</Text>
-              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 0.7, textAlign: 'center' }]}>{t('dashboard.qty')}</Text>
-              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 1.2, textAlign: 'right' }]}>{t('dashboard.revenueGenerated')}</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 0.6, textAlign: 'center' }]}>{t('dashboard.qty')}</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 1.1, textAlign: 'right' }]}>{t('dashboard.revenueGenerated')}</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 1, textAlign: 'right' }]}>Marge</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 0.6, textAlign: 'right' }]}>Marge %</Text>
             </View>
-            {topProducts.map((p, idx) => (
-              <View key={idx} style={[styles.tableRow, idx < topProducts.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
-                <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <View style={[styles.rankBadge, { backgroundColor: idx === 0 ? '#FEF3C7' : idx === 1 ? '#F3F4F6' : idx === 2 ? '#FDE68A' : colors.borderLight }]}>
-                    <Text style={[styles.rankText, { color: idx < 3 ? '#92400E' : colors.textTertiary }]}>{idx + 1}</Text>
+            {topProducts.map((p, idx) => {
+              const margin = p.ca - p.cost;
+              const isPositiveMargin = margin >= 0;
+              const marginPct = p.ca > 0 ? Math.round((margin / p.ca) * 100) : 0;
+              return (
+                <View key={idx} style={[styles.tableRow, idx < topProducts.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
+                  <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={[styles.rankBadge, { backgroundColor: idx === 0 ? '#FEF3C7' : idx === 1 ? '#F3F4F6' : idx === 2 ? '#FDE68A' : colors.borderLight }]}>
+                      <Text style={[styles.rankText, { color: idx < 3 ? '#92400E' : colors.textTertiary }]}>{idx + 1}</Text>
+                    </View>
+                    <Text style={[styles.cellBold, { color: colors.text }]} numberOfLines={1}>{p.name}</Text>
                   </View>
-                  <Text style={[styles.cellBold, { color: colors.text }]} numberOfLines={1}>{p.name}</Text>
+                  <Text style={[styles.cellText, { color: colors.textSecondary, flex: 0.6, textAlign: 'center' }]}>{p.qty}</Text>
+                  <Text style={[styles.cellBold, { color: colors.primary, flex: 1.1, textAlign: 'right' }]}>{formatCurrencyInteger(p.ca, cur)}</Text>
+                  <Text style={[styles.cellBold, { color: isPositiveMargin ? '#059669' : '#DC2626', flex: 1, textAlign: 'right' }]}>{formatCurrencyInteger(margin, cur)}</Text>
+                  <Text style={[styles.cellText, { color: isPositiveMargin ? '#059669' : '#DC2626', flex: 0.6, textAlign: 'right' }]}>{marginPct}%</Text>
                 </View>
-                <Text style={[styles.cellText, { color: colors.textSecondary, flex: 0.7, textAlign: 'center' }]}>{p.qty}</Text>
-                <Text style={[styles.cellBold, { color: colors.primary, flex: 1.2, textAlign: 'right' }]}>{formatCurrencyInteger(p.ca, cur)}</Text>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
+      </View>
+
+      {/* Classement ABC des produits */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={{ marginBottom: SPACING.MD }}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Classement ABC des produits</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>A = produits générant 80% du CA · B = intermédiaires · C = à revoir</Text>
+        </View>
+        {abcClassification.length === 0 ? (
+          <View style={styles.emptyChart}>
+            <Package size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Commencez à vendre pour voir le classement</Text>
+            <TouchableOpacity onPress={() => router.push('/ventes')} style={[styles.emptyActionBtn, { backgroundColor: colors.primary }]}>
+              <Text style={styles.emptyActionBtnText}>Créer une vente</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.tableContent}>
+            <View style={[styles.tableRowHeader, { borderBottomColor: colors.border }]}>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 0.4, textAlign: 'center' }]}>ABC</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 2 }]}>Produit</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 1, textAlign: 'right' }]}>CA</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 0.5, textAlign: 'right' }]}>%</Text>
+              <Text style={[styles.thCell, { color: colors.textTertiary, flex: 1, textAlign: 'right' }]}>Marge</Text>
+            </View>
+            {abcClassification.map((p, idx) => {
+              const abcColor = p.abc === 'A' ? '#059669' : p.abc === 'B' ? '#F59E0B' : '#EF4444';
+              return (
+                <View key={idx} style={[styles.tableRow, idx < abcClassification.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
+                  <View style={{ flex: 0.4, alignItems: 'center' as const }}>
+                    <View style={[styles.abcBadge, { backgroundColor: abcColor + '18' }]}>
+                      <Text style={{ fontSize: 11, fontWeight: '800' as const, color: abcColor }}>{p.abc}</Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.cellBold, { color: colors.text, flex: 2 }]} numberOfLines={1}>{p.name}</Text>
+                  <Text style={[styles.cellText, { color: colors.text, flex: 1, textAlign: 'right' }]}>{formatCurrencyInteger(p.ca, cur)}</Text>
+                  <Text style={[styles.cellText, { color: colors.textTertiary, flex: 0.5, textAlign: 'right' }]}>{Math.round(p.pctCA)}%</Text>
+                  <Text style={[styles.cellBold, { color: p.margin >= 0 ? '#059669' : '#DC2626', flex: 1, textAlign: 'right' }]}>{formatCurrencyInteger(p.margin, cur)}</Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </View>
+
+      {/* Comparaison N vs N-1 */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={styles.cardHeaderRow}>
+          <View>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Comparaison avec l'année précédente</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>CA mensuel — données indépendantes du filtre</Text>
+          </View>
+          <LegendRow
+            items={[
+              { color: '#6366F1', label: String(now.getFullYear()) },
+              { color: '#D1D5DB', label: String(now.getFullYear() - 1) },
+            ]}
+            textColor={colors.textSecondary}
+          />
+        </View>
+        {!hasN1Data && nVsN1Data.every(d => d.valueA === 0) ? (
+          <View style={styles.emptyChart}>
+            <BarChart3 size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Pas encore de données pour comparer les années</Text>
+            <TouchableOpacity onPress={() => router.push('/ventes')} style={[styles.emptyActionBtn, { backgroundColor: colors.primary }]}>
+              <Text style={styles.emptyActionBtnText}>Créer une vente</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {!hasN1Data && (
+              <View style={[styles.noteBar, { backgroundColor: '#FEF3C7', borderColor: '#FCD34D' }]}>
+                <Text style={{ fontSize: 11, color: '#92400E' }}>Données insuffisantes pour l'année précédente</Text>
+              </View>
+            )}
+            <GroupedBarChart
+              data={nVsN1Data}
+              width={isMobile ? width - 80 : 460}
+              height={200}
+              colorA="#6366F1"
+              colorB="#D1D5DB"
+              textColor={colors.textTertiary}
+              labelA={String(now.getFullYear())}
+              labelB={String(now.getFullYear() - 1)}
+            />
+          </>
+        )}
+      </View>
+      {/* ═══ BLOC EXPORT ═══ */}
+
+      {/* Exports PDF */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <Text style={[styles.cardTitle, { color: colors.text }]}>{t('reports.exportPDF')}</Text>
+        <View style={styles.exportBtnRow}>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: colors.primary }]} onPress={handleExportSalesReport} activeOpacity={0.7}>
+            <Download size={14} color={SEMANTIC_COLORS.WHITE} />
+            <Text style={styles.exportBtnText}>{t('reports.salesReport')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: '#059669' }]} onPress={handleExportStockReport} activeOpacity={0.7}>
+            <Download size={14} color={SEMANTIC_COLORS.WHITE} />
+            <Text style={styles.exportBtnText}>{t('reports.stockReport')}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.exportBtn, { backgroundColor: '#7C3AED' }]} onPress={handleExportFinancialReport} activeOpacity={0.7}>
+            <Download size={14} color={SEMANTIC_COLORS.WHITE} />
+            <Text style={styles.exportBtnText}>{t('reports.financialReport')}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </>
   );
@@ -1552,62 +2186,16 @@ const salesDetailsByCategory = useMemo(() => {
           icon={<ArrowUpRight size={16} color={colors.success} />}
           accentColor="#059669"
         />
-        <KPICard
-          title={t('dashboard.disbursements')}
-          value={formatCurrencyInteger(totalDecaissements, cur)}
-          icon={<ArrowDownRight size={16} color={colors.danger} />}
-          accentColor="#DC2626"
-        />
-      </View>
-
-      {/* Line chart evolution du solde + Donut ratio encaissements/decaissements */}
-      <View style={[styles.chartsRow, isMobile && styles.chartsRowMobile]}>
-        {/* Line chart solde 6 mois */}
-        <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Evolution du solde</Text>
-          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>{t('dashboard.last6Months')}</Text>
-          {treasurySparkline.every(v => v === 0) ? (
-            <View style={styles.emptyChart}>
-              <TrendingUp size={28} color={colors.textTertiary} />
-              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucun mouvement enregistre</Text>
-            </View>
-          ) : (
-            <TreasuryLineChart
-              data={treasurySparkline}
-              labels={sixMonthsData.map(m => m.label)}
-              width={isMobile ? width - 80 : 280}
-              height={160}
-              color={cashBalance >= 0 ? '#059669' : '#EF4444'}
-              textColor={colors.textTertiary}
-            />
-          )}
-        </View>
-
-        {/* Donut ratio encaissements / decaissements */}
-        <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Ratio flux</Text>
-          {totalEncaissements === 0 && totalDecaissements === 0 ? (
-            <View style={styles.emptyChart}>
-              <PieChart size={28} color={colors.textTertiary} />
-              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucun flux sur la periode</Text>
-            </View>
-          ) : (
-            <>
-              <View style={styles.donutContainer}>
-                <DonutChart
-                  segments={[
-                    { label: t('dashboard.income'), value: totalEncaissements, color: '#059669' },
-                    { label: t('dashboard.expenses'), value: totalDecaissements, color: '#EF4444' },
-                  ]}
-                  size={isMobile ? 100 : 120}
-                  strokeWidth={18}
-                  showLegend={true}
-                  centerValue={`${Math.round(totalEncaissements / (totalEncaissements + totalDecaissements || 1) * 100)}%`}
-                  centerLabel="entrees"
-                />
-              </View>
-            </>
-          )}
+        <View style={{ flex: 1, gap: 4 }}>
+          <KPICard
+            title={t('dashboard.disbursements')}
+            value={formatCurrencyInteger(totalDecaissementsWithPlanned, cur)}
+            icon={<ArrowDownRight size={16} color={colors.danger} />}
+            accentColor="#DC2626"
+          />
+          <Text style={{ fontSize: 10, color: colors.textTertiary, textAlign: 'center', paddingHorizontal: 4 }}>
+            {formatCurrencyInteger(totalDecaissements, cur)} effectués + {formatCurrencyInteger(totalSupplierToPay, cur)} à payer
+          </Text>
         </View>
       </View>
 
@@ -1644,13 +2232,13 @@ const salesDetailsByCategory = useMemo(() => {
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <View style={styles.cardHeaderRow}>
           <View>
-            <Text style={[styles.cardTitle, { color: colors.text }]}>Projection tresorerie</Text>
-            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Base sur factures en attente</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Projection de trésorerie</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Estimation basée sur les factures en attente</Text>
           </View>
           <LegendRow
             items={[
-              { color: '#059669', label: 'Reel' },
-              { color: '#6366F1', label: 'Projete' },
+              { color: '#059669', label: 'Réel' },
+              { color: '#6366F1', label: 'Projeté' },
             ]}
             textColor={colors.textSecondary}
           />
@@ -1663,6 +2251,93 @@ const salesDetailsByCategory = useMemo(() => {
           colorProjected="#6366F1"
           textColor={colors.textSecondary}
         />
+      </View>
+
+      {/* Évolution du solde + Répartition dépenses */}
+      <View style={[styles.chartsRow, isMobile && styles.chartsRowMobile]}>
+        <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Évolution du solde</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Suivez la santé de votre trésorerie sur 6 mois</Text>
+          {treasurySparkline.every(v => v === 0) ? (
+            <View style={styles.emptyChart}>
+              <TrendingUp size={28} color={colors.textTertiary} />
+              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucun mouvement enregistré</Text>
+            </View>
+          ) : (
+            <TreasuryLineChart
+              data={treasurySparkline}
+              labels={sixMonthsData.map(m => m.label)}
+              width={isMobile ? width - 80 : 280}
+              height={160}
+              color={cashBalance >= 0 ? '#059669' : '#EF4444'}
+              textColor={colors.textTertiary}
+            />
+          )}
+        </View>
+
+        <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Répartition des dépenses</Text>
+          <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Où va votre argent ?</Text>
+          {expenseBreakdownSegments.length === 0 ? (
+            <View style={styles.emptyChart}>
+              <PieChart size={28} color={colors.textTertiary} />
+              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Aucune dépense sur la période</Text>
+            </View>
+          ) : (
+            <>
+              <Text style={[styles.cardSubtitle, { color: colors.textTertiary, marginBottom: 4 }]}>Période sélectionnée</Text>
+              <View style={styles.donutContainer}>
+                <DonutChart
+                  segments={expenseBreakdownSegments}
+                  size={isMobile ? 100 : 120}
+                  strokeWidth={18}
+                  showLegend={true}
+                  centerValue={formatCurrencyInteger(expenseBreakdownSegments.reduce((s, seg) => s + seg.value, 0), cur)}
+                  centerLabel="total"
+                  currency={cur}
+                />
+              </View>
+            </>
+          )}
+        </View>
+      </View>
+
+      {/* Délai moyen de paiement clients */}
+      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={styles.cardHeaderRow}>
+          <View>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Délai moyen de paiement</Text>
+            <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>Surveillez les délais de règlement de vos clients</Text>
+          </View>
+          <View style={[styles.loyaltyKpiBadge, { backgroundColor: avgPaymentDelay <= 30 ? '#ECFDF5' : '#FEF2F2' }]}>
+            <Text style={{ fontSize: 11, fontWeight: '700' as const, color: avgPaymentDelay <= 30 ? '#059669' : '#DC2626' }}>
+              Actuel : {avgPaymentDelay}j
+            </Text>
+          </View>
+        </View>
+        {paymentDelayData.every(d => d.value === 0) ? (
+          <View style={styles.emptyChart}>
+            <Clock size={28} color={colors.textTertiary} />
+            <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Pas encore de données de paiement</Text>
+          </View>
+        ) : (
+          <>
+            <HorizontalRefBarChart
+              data={paymentDelayData}
+              width={isMobile ? width - 80 : 460}
+              referenceLine={30}
+              referenceLabel="30j (délai légal)"
+              goodColor="#059669"
+              badColor="#EF4444"
+              textColor={colors.textSecondary}
+            />
+            {paymentDelayData.some(d => d.value === 0) && (
+              <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: SPACING.MD, fontStyle: 'italic' as const }}>
+                0j = aucune facture émise ce mois ou paiement immédiat
+              </Text>
+            )}
+          </>
+        )}
       </View>
 
       {/* Mini-tableaux factures en retard + fournisseurs a payer */}
@@ -1778,7 +2453,7 @@ const salesDetailsByCategory = useMemo(() => {
     <>
       {renderTodayBanner()}
       <View style={[styles.kpiRow, isMobile && styles.kpiRowMobile]}>
-        <KPICard title={t('dashboard.monthlyRevenue')} value={formatCurrencyInteger(monthlyRevenue, cur)} change={Math.round(revenueChange * 10) / 10} icon={<TrendingUp size={16} color={colors.primary} />} sparklineData={revenueSparkline} sparklineColor={colors.primary} />
+        <KPICard title={t('dashboard.monthlyRevenue')} value={formatCurrencyInteger(monthlyRevenue, cur)} change={revenueChange !== undefined ? Math.round(revenueChange * 10) / 10 : undefined} icon={<TrendingUp size={16} color={colors.primary} />} sparklineData={revenueSparkline} sparklineColor={colors.primary} />
         <KPICard title={t('dashboard.salesNumber')} value={String(paidSalesCount)} icon={<ShoppingCart size={16} color="#7C3AED" />} accentColor="#7C3AED" sparklineData={salesSparkline} sparklineColor="#7C3AED" />
       </View>
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -1794,7 +2469,11 @@ const salesDetailsByCategory = useMemo(() => {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <PageHeader title={t('dashboard.title')} />
+      <PageHeader title={t('dashboard.title')} rightContent={
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.SM }}>
+          <View style={[styles.healthBadge, { backgroundColor: globalHealthStatus === 'green' ? '#059669' : globalHealthStatus === 'orange' ? '#F59E0B' : '#DC2626' }]} />
+        </View>
+      } />
       {!simplifiedDashboard && (
         <SectionTabBar
           tabs={DASHBOARD_TAB_KEYS.map(tab => ({ ...tab, label: t(tab.labelKey) }))}
@@ -1823,6 +2502,14 @@ const salesDetailsByCategory = useMemo(() => {
           <View style={{ flex: 1 }}>
             <Text style={[styles.greetingText, { color: colors.text }]}>{greeting}</Text>
             <Text style={[styles.dateText, { color: colors.textSecondary }]}>{todayStr}</Text>
+          </View>
+          <View style={styles.freshnessRow}>
+            <Text style={[styles.freshnessText, { color: colors.textTertiary }]}>
+              {refreshMinutesAgo < 1 ? 'Mis à jour à l\'instant' : `Mis à jour il y a ${refreshMinutesAgo} min`}
+            </Text>
+            <TouchableOpacity onPress={() => setLastRefreshTime(new Date())} activeOpacity={0.7}>
+              <RefreshCw size={14} color={colors.primary} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -1926,12 +2613,12 @@ const styles = StyleSheet.create({
   // Banniere CA du jour
   todayAndTargetRow: { flexDirection: 'row' as const, gap: SPACING.SM, alignItems: 'stretch' as const },
   todayAndTargetRowMobile: { flexDirection: 'column' as const },
-  targetCard: { flex: 1 },
-  todayBanner: { borderWidth: 1, borderRadius: RADIUS.XL, padding: SPACING.XL, position: 'relative', overflow: 'hidden', flex: 1 },
+  targetCard: { flex: 1, justifyContent: 'center' as const, alignItems: 'center' as const },
+  todayBanner: { borderWidth: 1, borderRadius: RADIUS.XL, padding: SPACING.LG, position: 'relative', overflow: 'hidden', flex: 1 },
   todayAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, borderTopLeftRadius: RADIUS.XL, borderBottomLeftRadius: RADIUS.XL },
   todayBannerContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  todayLabel: { fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM, marginBottom: SPACING.XXS },
-  todayAmount: { fontSize: 26, fontWeight: '800', letterSpacing: TYPOGRAPHY.LETTER_SPACING.TIGHT },
+  todayLabel: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM, marginBottom: SPACING.XXS },
+  todayAmount: { fontSize: TYPOGRAPHY.SIZE.BODY_LARGE, fontWeight: TYPOGRAPHY.WEIGHT.BOLD, letterSpacing: TYPOGRAPHY.LETTER_SPACING.SNUG },
   todaySalesBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACING.SM, paddingHorizontal: SPACING.XL, paddingVertical: SPACING.MD, borderRadius: RADIUS.ROUND },
   todaySalesText: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
 
@@ -2031,4 +2718,15 @@ const styles = StyleSheet.create({
   variantSaleLabel: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM },
   variantSaleQty: { fontSize: 10 },
   variantSaleAmount: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+
+  emptyActionBtn: { paddingHorizontal: SPACING.XXL, paddingVertical: SPACING.LG, borderRadius: RADIUS.MD, marginTop: SPACING.SM },
+  emptyActionBtnText: { color: '#fff', fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD, textAlign: 'center' as const },
+  breakEvenNote: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: SPACING.XL, paddingVertical: SPACING.MD, borderRadius: RADIUS.MD, borderWidth: 1, marginTop: SPACING.MD },
+  loyaltyKpiBadge: { paddingHorizontal: SPACING.LG, paddingVertical: SPACING.SM, borderRadius: RADIUS.ROUND },
+  abcTooltip: { paddingHorizontal: SPACING.LG, paddingVertical: SPACING.SM, borderRadius: RADIUS.SM },
+  abcBadge: { width: 26, height: 26, borderRadius: RADIUS.SM, alignItems: 'center' as const, justifyContent: 'center' as const },
+  noteBar: { paddingHorizontal: SPACING.XL, paddingVertical: SPACING.MD, borderRadius: RADIUS.MD, borderWidth: 1, marginBottom: SPACING.MD },
+  healthBadge: { width: 10, height: 10, borderRadius: 5, marginLeft: SPACING.SM },
+  freshnessRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: SPACING.SM },
+  freshnessText: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM },
 });

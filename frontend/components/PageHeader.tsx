@@ -25,6 +25,7 @@ interface PageHeaderProps {
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
+  rightContent?: React.ReactNode;
   onMenuPress?: () => void;
 }
 
@@ -58,7 +59,7 @@ function LanguageSwitcher() {
   );
 }
 
-export default React.memo(function PageHeader({ title, action }: PageHeaderProps) {
+export default React.memo(function PageHeader({ title, action, rightContent }: PageHeaderProps) {
   const { colors } = useTheme();
   const { notifications } = useData();
   const { signOut } = useAuth();
@@ -166,6 +167,7 @@ export default React.memo(function PageHeader({ title, action }: PageHeaderProps
           <Text style={[styles.title, { color: colors.headerText }, isMobile && styles.titleMobile]} numberOfLines={1}>
             {title}
           </Text>
+          {rightContent ?? null}
         </View>
       </View>
       <View style={styles.right}>

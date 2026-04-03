@@ -8,6 +8,7 @@ import type {
   Supplier, PurchaseOrder, PurchaseOrderItem, PurchaseOrderStatus,
   SupplierInvoice, SupplierInvoiceItem, SupplierInvoiceStatus,
   StockMovementRecord, StockMovementType, ReminderLogRecord, ReminderLevel,
+  Employee, EmployeeSchedule, Payslip, CompanyExpense,
 } from '@/types';
 import { normalizeProductType } from '@/constants/productTypes';
 
@@ -633,6 +634,192 @@ function mapRecipeToDB(r: { id?: string; productId?: string; variantId?: string;
   return m;
 }
 
+// ====== EMPLOYEE ======
+
+function mapEmployeeFromDB(row: Record<string, unknown>): Employee {
+  return {
+    id: row.id as string,
+    companyId: row.company_id as string,
+    firstName: row.first_name as string,
+    lastName: row.last_name as string,
+    email: row.email as string,
+    phone: row.phone as string,
+    address: row.address as string,
+    city: row.city as string,
+    postalCode: row.postal_code as string,
+    country: row.country as string,
+    department: row.department as string,
+    position: row.position as string,
+    contractType: (row.contract_type as Employee['contractType']) || 'CDI',
+    hourlyRate: toNumber(row.hourly_rate),
+    monthlySalary: toNumber(row.monthly_salary),
+    hireDate: row.hire_date as string,
+    endDate: row.end_date as string | undefined,
+    socialSecurityNumber: (row.social_security_number as string) || '',
+    notes: row.notes as string,
+    isActive: row.is_active as boolean,
+    isDeleted: row.is_deleted as boolean,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapEmployeeToDB(e: Partial<Employee>): Record<string, unknown> {
+  const m: Record<string, unknown> = {};
+  if (e.id !== undefined) m.id = e.id;
+  if (e.companyId !== undefined) m.company_id = e.companyId;
+  if (e.firstName !== undefined) m.first_name = e.firstName;
+  if (e.lastName !== undefined) m.last_name = e.lastName;
+  if (e.email !== undefined) m.email = e.email;
+  if (e.phone !== undefined) m.phone = e.phone;
+  if (e.address !== undefined) m.address = e.address;
+  if (e.city !== undefined) m.city = e.city;
+  if (e.postalCode !== undefined) m.postal_code = e.postalCode;
+  if (e.country !== undefined) m.country = e.country;
+  if (e.department !== undefined) m.department = e.department;
+  if (e.position !== undefined) m.position = e.position;
+  if (e.contractType !== undefined) m.contract_type = e.contractType;
+  if (e.hourlyRate !== undefined) m.hourly_rate = e.hourlyRate;
+  if (e.monthlySalary !== undefined) m.monthly_salary = e.monthlySalary;
+  if (e.hireDate !== undefined) m.hire_date = e.hireDate;
+  if (e.endDate !== undefined) m.end_date = e.endDate || null;
+  if (e.socialSecurityNumber !== undefined) m.social_security_number = e.socialSecurityNumber;
+  if (e.notes !== undefined) m.notes = e.notes;
+  if (e.isActive !== undefined) m.is_active = e.isActive;
+  if (e.isDeleted !== undefined) m.is_deleted = e.isDeleted;
+  if (e.updatedAt !== undefined) m.updated_at = e.updatedAt;
+  return m;
+}
+
+// ====== EMPLOYEE SCHEDULE ======
+
+function mapScheduleFromDB(row: Record<string, unknown>): EmployeeSchedule {
+  return {
+    id: row.id as string,
+    companyId: row.company_id as string,
+    employeeId: row.employee_id as string,
+    weekStart: row.week_start as string,
+    dayOfWeek: toNumber(row.day_of_week),
+    plannedStart: row.planned_start as string | undefined,
+    plannedEnd: row.planned_end as string | undefined,
+    plannedHours: toNumber(row.planned_hours),
+    actualStart: row.actual_start as string | undefined,
+    actualEnd: row.actual_end as string | undefined,
+    actualHours: toNumber(row.actual_hours),
+    notes: row.notes as string,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapScheduleToDB(s: Partial<EmployeeSchedule>): Record<string, unknown> {
+  const m: Record<string, unknown> = {};
+  if (s.id !== undefined) m.id = s.id;
+  if (s.companyId !== undefined) m.company_id = s.companyId;
+  if (s.employeeId !== undefined) m.employee_id = s.employeeId;
+  if (s.weekStart !== undefined) m.week_start = s.weekStart;
+  if (s.dayOfWeek !== undefined) m.day_of_week = s.dayOfWeek;
+  if (s.plannedStart !== undefined) m.planned_start = s.plannedStart || null;
+  if (s.plannedEnd !== undefined) m.planned_end = s.plannedEnd || null;
+  if (s.plannedHours !== undefined) m.planned_hours = s.plannedHours;
+  if (s.actualStart !== undefined) m.actual_start = s.actualStart || null;
+  if (s.actualEnd !== undefined) m.actual_end = s.actualEnd || null;
+  if (s.actualHours !== undefined) m.actual_hours = s.actualHours;
+  if (s.notes !== undefined) m.notes = s.notes;
+  if (s.updatedAt !== undefined) m.updated_at = s.updatedAt;
+  return m;
+}
+
+// ====== PAYSLIP ======
+
+function mapPayslipFromDB(row: Record<string, unknown>): Payslip {
+  return {
+    id: row.id as string,
+    companyId: row.company_id as string,
+    employeeId: row.employee_id as string,
+    periodStart: row.period_start as string,
+    periodEnd: row.period_end as string,
+    plannedHours: toNumber(row.planned_hours),
+    actualHours: toNumber(row.actual_hours),
+    overtimeHours: toNumber(row.overtime_hours),
+    hourlyRate: toNumber(row.hourly_rate),
+    grossSalary: toNumber(row.gross_salary),
+    deductions: toNumber(row.deductions),
+    netSalary: toNumber(row.net_salary),
+    status: (row.status as Payslip['status']) || 'draft',
+    validatedAt: row.validated_at as string | undefined,
+    paidAt: row.paid_at as string | undefined,
+    notes: row.notes as string,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapPayslipToDB(p: Partial<Payslip>): Record<string, unknown> {
+  const m: Record<string, unknown> = {};
+  if (p.id !== undefined) m.id = p.id;
+  if (p.companyId !== undefined) m.company_id = p.companyId;
+  if (p.employeeId !== undefined) m.employee_id = p.employeeId;
+  if (p.periodStart !== undefined) m.period_start = p.periodStart;
+  if (p.periodEnd !== undefined) m.period_end = p.periodEnd;
+  if (p.plannedHours !== undefined) m.planned_hours = p.plannedHours;
+  if (p.actualHours !== undefined) m.actual_hours = p.actualHours;
+  if (p.overtimeHours !== undefined) m.overtime_hours = p.overtimeHours;
+  if (p.hourlyRate !== undefined) m.hourly_rate = p.hourlyRate;
+  if (p.grossSalary !== undefined) m.gross_salary = p.grossSalary;
+  if (p.deductions !== undefined) m.deductions = p.deductions;
+  if (p.netSalary !== undefined) m.net_salary = p.netSalary;
+  if (p.status !== undefined) m.status = p.status;
+  if (p.validatedAt !== undefined) m.validated_at = p.validatedAt;
+  if (p.paidAt !== undefined) m.paid_at = p.paidAt;
+  if (p.notes !== undefined) m.notes = p.notes;
+  if (p.updatedAt !== undefined) m.updated_at = p.updatedAt;
+  return m;
+}
+
+// ====== EXPENSE ======
+
+function mapExpenseFromDB(row: Record<string, unknown>): CompanyExpense {
+  return {
+    id: row.id as string,
+    companyId: row.company_id as string,
+    expenseType: (row.expense_type as CompanyExpense['expenseType']) || 'autre',
+    description: row.description as string,
+    amount: toNumber(row.amount),
+    vatAmount: toNumber(row.vat_amount),
+    vatRate: toNumber(row.vat_rate),
+    date: row.date as string,
+    supplierName: row.supplier_name as string,
+    reference: row.reference as string,
+    paymentMethod: row.payment_method as string,
+    status: (row.status as CompanyExpense['status']) || 'pending',
+    notes: row.notes as string,
+    isDeleted: row.is_deleted as boolean,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapExpenseToDB(e: Partial<CompanyExpense>): Record<string, unknown> {
+  const m: Record<string, unknown> = {};
+  if (e.id !== undefined) m.id = e.id;
+  if (e.companyId !== undefined) m.company_id = e.companyId;
+  if (e.expenseType !== undefined) m.expense_type = e.expenseType;
+  if (e.description !== undefined) m.description = e.description;
+  if (e.amount !== undefined) m.amount = e.amount;
+  if (e.vatAmount !== undefined) m.vat_amount = e.vatAmount;
+  if (e.vatRate !== undefined) m.vat_rate = e.vatRate;
+  if (e.date !== undefined) m.date = e.date;
+  if (e.supplierName !== undefined) m.supplier_name = e.supplierName;
+  if (e.reference !== undefined) m.reference = e.reference;
+  if (e.paymentMethod !== undefined) m.payment_method = e.paymentMethod;
+  if (e.status !== undefined) m.status = e.status;
+  if (e.notes !== undefined) m.notes = e.notes;
+  if (e.isDeleted !== undefined) m.is_deleted = e.isDeleted;
+  if (e.updatedAt !== undefined) m.updated_at = e.updatedAt;
+  return m;
+}
+
 // ====== STOCK MOVEMENT ======
 
 function mapStockMovementFromDB(row: Record<string, unknown>): StockMovementRecord {
@@ -1162,6 +1349,90 @@ export const db = {
     return safeMutate('deleteRecipesForProduct', async () => {
       const { error } = await supabase.from('product_recipes').delete().eq('product_id', productId);
       if (error) throw new Error(`[DB] deleteRecipesForProduct: ${error.message}`);
+    });
+  },
+
+  // --- Employees ---
+  async fetchEmployees(companyId: string): Promise<Employee[]> {
+    return safeFetch('fetchEmployees', [], async () => {
+      const { data, error } = await supabase.from('employees').select('*').eq('company_id', companyId).order('last_name');
+      if (error) { logNetworkWarningOnce('fetchEmployees'); return []; }
+      return (data as Record<string, unknown>[]).map(mapEmployeeFromDB);
+    });
+  },
+  async insertEmployee(e: Employee): Promise<void> {
+    return safeMutate('insertEmployee', async () => {
+      const { error } = await supabase.from('employees').insert(mapEmployeeToDB(e));
+      if (error) throw new Error(`[DB] insertEmployee: ${error.message}`);
+    });
+  },
+  async updateEmployee(id: string, updates: Partial<Employee>): Promise<void> {
+    return safeMutate('updateEmployee', async () => {
+      const { error } = await supabase.from('employees').update(mapEmployeeToDB(updates)).eq('id', id);
+      if (error) throw new Error(`[DB] updateEmployee: ${error.message}`);
+    });
+  },
+
+  // --- Employee Schedules ---
+  async fetchSchedules(companyId: string): Promise<EmployeeSchedule[]> {
+    return safeFetch('fetchSchedules', [], async () => {
+      const { data, error } = await supabase.from('employee_schedules').select('*').eq('company_id', companyId).order('week_start', { ascending: false });
+      if (error) { logNetworkWarningOnce('fetchSchedules'); return []; }
+      return (data as Record<string, unknown>[]).map(mapScheduleFromDB);
+    });
+  },
+  async upsertSchedule(s: EmployeeSchedule): Promise<void> {
+    return safeMutate('upsertSchedule', async () => {
+      const { error } = await supabase.from('employee_schedules').upsert(mapScheduleToDB(s));
+      if (error) throw new Error(`[DB] upsertSchedule: ${error.message}`);
+    });
+  },
+  async deleteSchedule(id: string): Promise<void> {
+    return safeMutate('deleteSchedule', async () => {
+      const { error } = await supabase.from('employee_schedules').delete().eq('id', id);
+      if (error) throw new Error(`[DB] deleteSchedule: ${error.message}`);
+    });
+  },
+
+  // --- Payslips ---
+  async fetchPayslips(companyId: string): Promise<Payslip[]> {
+    return safeFetch('fetchPayslips', [], async () => {
+      const { data, error } = await supabase.from('payslips').select('*').eq('company_id', companyId).order('period_start', { ascending: false });
+      if (error) { logNetworkWarningOnce('fetchPayslips'); return []; }
+      return (data as Record<string, unknown>[]).map(mapPayslipFromDB);
+    });
+  },
+  async insertPayslip(p: Payslip): Promise<void> {
+    return safeMutate('insertPayslip', async () => {
+      const { error } = await supabase.from('payslips').insert(mapPayslipToDB(p));
+      if (error) throw new Error(`[DB] insertPayslip: ${error.message}`);
+    });
+  },
+  async updatePayslip(id: string, updates: Partial<Payslip>): Promise<void> {
+    return safeMutate('updatePayslip', async () => {
+      const { error } = await supabase.from('payslips').update(mapPayslipToDB(updates)).eq('id', id);
+      if (error) throw new Error(`[DB] updatePayslip: ${error.message}`);
+    });
+  },
+
+  // --- Expenses ---
+  async fetchExpenses(companyId: string): Promise<CompanyExpense[]> {
+    return safeFetch('fetchExpenses', [], async () => {
+      const { data, error } = await supabase.from('expenses').select('*').eq('company_id', companyId).order('date', { ascending: false });
+      if (error) { logNetworkWarningOnce('fetchExpenses'); return []; }
+      return (data as Record<string, unknown>[]).map(mapExpenseFromDB);
+    });
+  },
+  async insertExpense(e: CompanyExpense): Promise<void> {
+    return safeMutate('insertExpense', async () => {
+      const { error } = await supabase.from('expenses').insert(mapExpenseToDB(e));
+      if (error) throw new Error(`[DB] insertExpense: ${error.message}`);
+    });
+  },
+  async updateExpense(id: string, updates: Partial<CompanyExpense>): Promise<void> {
+    return safeMutate('updateExpense', async () => {
+      const { error } = await supabase.from('expenses').update(mapExpenseToDB(updates)).eq('id', id);
+      if (error) throw new Error(`[DB] updateExpense: ${error.message}`);
     });
   },
 

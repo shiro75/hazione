@@ -44,11 +44,11 @@ const EMPTY_FORM = {
 type SortOption = 'name_asc' | 'name_desc' | 'ca_desc' | 'last_activity' | 'unpaid';
 
 const SORT_OPTIONS: { value: SortOption; label: string }[] = [
-  { value: 'name_asc', label: 'Nom A\u2192Z' },
-  { value: 'name_desc', label: 'Nom Z\u2192A' },
-  { value: 'ca_desc', label: 'CA d\u00e9croissant' },
-  { value: 'last_activity', label: 'Derni\u00e8re activit\u00e9' },
-  { value: 'unpaid', label: 'Impay\u00e9s en premier' },
+  { value: 'name_asc', label: 'Nom A→Z' },
+  { value: 'name_desc', label: 'Nom Z→A' },
+  { value: 'ca_desc', label: 'CA décroissant' },
+  { value: 'last_activity', label: 'Dernière activité' },
+  { value: 'unpaid', label: 'Impayés en premier' },
 ];
 
 export default function ClientsScreen() {
@@ -311,7 +311,7 @@ export default function ClientsScreen() {
               <Building size={32} color={colors.textTertiary} />
             </View>
             <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>
-              {search ? 'Aucun résultat' : 'Aucun client pour l\u2019instant'}
+              {search ? 'Aucun résultat' : 'Aucun client pour l’instant'}
             </Text>
             <Text style={[styles.emptyDesc, { color: colors.textTertiary }]}>
               {search ? 'Essayez un autre terme de recherche' : 'Commencez par ajouter votre premier client !'}

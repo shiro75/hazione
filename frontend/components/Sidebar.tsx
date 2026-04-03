@@ -21,6 +21,7 @@ import {
   Truck,
   Store,
   CreditCard,
+  Users,
 } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
@@ -44,6 +45,7 @@ const NAV_ITEMS: NavItem[] = [
   { labelKey: 'nav.pos', icon: ShoppingBag, route: '/sales', moduleKey: 'sales' },
   { labelKey: 'nav.shop', icon: Store, route: '/boutique', moduleKey: 'shop' },
   { labelKey: 'nav.payments', icon: CreditCard, route: '/payments', moduleKey: 'payments' },
+  { labelKey: 'nav.staff', icon: Users, route: '/staff', moduleKey: 'staff' },
   { labelKey: 'nav.settings', icon: Settings, route: '/settings', moduleKey: 'settings' },
   { labelKey: 'nav.admin', icon: Shield, route: '/admin', moduleKey: 'admin' },
 ];

@@ -188,14 +188,14 @@ tous les anciens fichiers de migration et schemas partiels.
 
 ```bash
 cd frontend
-bun install
+npm install
 npx expo start
 
 ```
 
 ## Configuration
 
-Variables d'environnement (gerees via Rork) :
+Variables d'environnement :
 - `EXPO_PUBLIC_SUPABASE_URL` — URL du projet Supabase
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — Cle anonyme Supabase
 

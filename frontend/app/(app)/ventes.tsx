@@ -262,15 +262,15 @@ function CommandesTabWithSubTabs({
           style={{ width: 32, height: 32, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder, marginRight: 4 }}
           onPress={() => {
             const cols: ExportColumn<Record<string, unknown>>[] = [
-              { key: 'orderNumber', label: 'ventes.orderNumber'},
-              { key: 'customerFirstName', label: 'ventes.customerFirstName' },
-              { key: 'customerLastName', label: 'ventes.customerLastName' },
-              { key: 'customerEmail', label: 'ventes.customerEmail' },
-              { key: 'status', label: 'ventes.status' },
-              { key: 'totalTtc', label: 'ventes.totalTtc' },
-              { key: 'deliveryMode', label: 'ventes.deliveryMode' },
-              { key: 'paymentMethod', label: 'ventes.paymentMethod'},
-              { key: 'createdAt', label: 'ventes.createdAt' },
+              { key: 'orderNumber', label: 'N° Commande' },
+              { key: 'customerFirstName', label: 'Prénom' },
+              { key: 'customerLastName', label: 'Nom' },
+              { key: 'customerEmail', label: 'Email' },
+              { key: 'status', label: 'Statut' },
+              { key: 'totalTtc', label: 'Total TTC' },
+              { key: 'deliveryMode', label: 'Mode livraison' },
+              { key: 'paymentMethod', label: 'Paiement' },
+              { key: 'createdAt', label: 'Date' },
             ];
             const data = orders.map(o => ({ ...o } as unknown as Record<string, unknown>));
             void exportToCSV(data, cols, `commandes_${new Date().toISOString().slice(0, 10)}.csv`);
@@ -303,7 +303,6 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
     activeClients, createClient, updateClient, deleteClient, invoices, company, sales,
     discountCategories, discountCategoryRates, addDiscountCategory, updateDiscountCategoryRate, removeDiscountCategory, quotes, reminderLogs, creditNotes,
   } = useData();
-  const { t } = useI18n();
   const cur = company.currency || 'EUR';
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<ClientSortKey>('az');
@@ -418,7 +417,7 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
           <Search size={18} color={colors.textTertiary} />
           <TextInput
             style={[styles.searchInput, { color: colors.text }]}
-            placeholder={t('ventes.searchClient')}
+            placeholder="Rechercher un client..."
             placeholderTextColor={colors.textTertiary}
             value={search}
             onChangeText={setSearch}
@@ -436,15 +435,15 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
           style={{ width: 36, height: 36, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }}
           onPress={() => {
             const cols: ExportColumn<Record<string, unknown>>[] = [
-              { key: 'companyName', label: 'ventes.companyName' },
-              { key: 'firstName', label: 'ventes.firstName' },
-              { key: 'lastName', label: 'ventes.lastName' },
-              { key: 'email', label: 'ventes.email' },
-              { key: 'phone', label: 'ventes.phone' },
-              { key: 'address', label: 'ventes.address' },
-              { key: 'city', label: 'ventes.city' },
-              { key: 'postalCode', label: 'ventes.postalCode' },
-              { key: 'country', label: 'ventes.country'},
+              { key: 'companyName', label: 'Raison sociale' },
+              { key: 'firstName', label: 'Prénom' },
+              { key: 'lastName', label: 'Nom' },
+              { key: 'email', label: 'Email' },
+              { key: 'phone', label: 'Téléphone' },
+              { key: 'address', label: 'Adresse' },
+              { key: 'city', label: 'Ville' },
+              { key: 'postalCode', label: 'Code postal' },
+              { key: 'country', label: 'Pays' },
             ];
             const data = activeClients.map(c => ({ ...c } as unknown as Record<string, unknown>));
             void exportToCSV(data, cols, `clients_${new Date().toISOString().slice(0, 10)}.csv`);
@@ -486,10 +485,10 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
         <View style={[styles.tableCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
           {!isMobile && (
             <View style={[styles.clientHeaderRow, { borderBottomWidth: 1, borderBottomColor: colors.border }]}>
-              <Text style={[styles.clientColHeader, { flex: 2, color: colors.textTertiary }]}>{t('ventes.colClient')}</Text>
-              <Text style={[styles.clientColHeader, { flex: 2, color: colors.textTertiary }]}>{t('ventes.colContact')}</Text>
-              <Text style={[styles.clientColHeader, { flex: 1, color: colors.textTertiary, textAlign: 'right' as const }]}>{t('ventes.colInvoices')}</Text>
-              <Text style={[styles.clientColHeader, { flex: 1, color: colors.textTertiary, textAlign: 'right' as const }]}>{t('ventes.colTotal')}</Text>
+              <Text style={[styles.clientColHeader, { flex: 2, color: colors.textTertiary }]}>Client</Text>
+              <Text style={[styles.clientColHeader, { flex: 2, color: colors.textTertiary }]}>Contact</Text>
+              <Text style={[styles.clientColHeader, { flex: 1, color: colors.textTertiary, textAlign: 'right' as const }]}>Factures</Text>
+              <Text style={[styles.clientColHeader, { flex: 1, color: colors.textTertiary, textAlign: 'right' as const }]}>CA total</Text>
 
             </View>
           )}
@@ -540,7 +539,7 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
       <FormModal
         visible={formVisible}
         onClose={() => setFormVisible(false)}
-        title={editingId ? t('ventes.editClient') : t('ventes.newClient')}
+        title={editingId ? 'Modifier le client' : 'Nouveau client'}
         onSubmit={handleSubmit}
         submitLabel={editingId ? 'Mettre à jour' : 'Créer'}
         headerActions={editingId ? (
@@ -559,8 +558,8 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
             <Text style={[styles.errorText, { color: colors.danger }]}>{formError}</Text>
           </View>
         ) : null}
-        <SelectField label="Type" value={form.type} options={[{ label: t('ventes.company'), value: 'company' }, { label: t('ventes.individual'), value: 'individual' }]} onSelect={(v) => setForm((p) => ({ ...p, type: v as 'company' | 'individual' }))} required />
-        {form.type === 'company' && <FormField label={t('ventes.companyName')} value={form.companyName} onChangeText={(v) => setForm((p) => ({ ...p, companyName: v }))} placeholder={t('ventes.individual')} required />}
+        <SelectField label="Type" value={form.type} options={[{ label: 'Entreprise', value: 'company' }, { label: 'Particulier', value: 'individual' }]} onSelect={(v) => setForm((p) => ({ ...p, type: v as 'company' | 'individual' }))} required />
+        {form.type === 'company' && <FormField label="Raison sociale" value={form.companyName} onChangeText={(v) => setForm((p) => ({ ...p, companyName: v }))} placeholder="Nom de l'entreprise" required />}
         {form.type === 'individual' && (
           <View style={styles.formRow}>
             <View style={styles.formCol}><FormField label="Prénom" value={form.firstName} onChangeText={(v) => setForm((p) => ({ ...p, firstName: v }))} placeholder="Prénom" required /></View>
@@ -570,14 +569,14 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
         {form.type === 'company' && (
           <View style={styles.formRow}>
             <View style={styles.formCol}>
-              <FormField label={t('ventes.firstName')} value={form.firstName} onChangeText={(v) => setForm((p) => ({ ...p, firstName: v }))} placeholder={t('ventes.firstName')} />
+              <FormField label="Prénom contact (optionnel)" value={form.firstName} onChangeText={(v) => setForm((p) => ({ ...p, firstName: v }))} placeholder="Prénom" />
             </View>
             <View style={styles.formCol}>
-              <FormField label={t('ventes.lastName')} value={form.lastName} onChangeText={(v) => setForm((p) => ({ ...p, lastName: v }))} placeholder={t('ventes.lastName')} />
+              <FormField label="Nom contact (optionnel)" value={form.lastName} onChangeText={(v) => setForm((p) => ({ ...p, lastName: v }))} placeholder="Nom" />
             </View>
           </View>
         )}
-        <FormField label={t('ventes.email')} value={form.email} onChangeText={(v) => setForm((p) => ({ ...p, email: v }))} placeholder="email@example.com" keyboardType="email-address" />
+        <FormField label="Email" value={form.email} onChangeText={(v) => setForm((p) => ({ ...p, email: v }))} placeholder="email@example.com" keyboardType="email-address" />
         <PhoneField value={form.phone} onChangeText={(v) => setForm((p) => ({ ...p, phone: v }))} />
         <AddressFields
           address={form.address}
@@ -649,21 +648,21 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
       <UniversalImportModal
         visible={csvImportVisible}
         onClose={() => setCsvImportVisible(false)}
-        title={t('ventes.importClient')}
+        title="Importer des clients"
         entityLabel="client"
         fields={[
-          { key: 'companyName', label: 'ventes.companyType', aliases: ['entreprise', 'société'] },
-          { key: 'firstName', label: 'ventes.FirstName', aliases: ['prenom'] },
-          { key: 'lastName', label: 'ventes.LastName', required: true, aliases: ['nom de famille'] },
-          { key: 'email', label: 'ventes.Mail', aliases: ['e-mail', 'mail'] },
-          { key: 'phone', label: 'ventes.phone', aliases: ['tel', 'portable'] },
-          { key: 'address', label: 'ventes.address', aliases: ['rue'] },
-          { key: 'city', label: 'ventes.city' },
-          { key: 'postalCode', label: 'ventes.postalCode', aliases: ['cp', 'zip'] },
-          { key: 'country', label: 'ventes.country' },
-          { key: 'vatNumber', label: 'ventes.vatNumber', aliases: ['tva', 'vat'] },
-          { key: 'siret', label: 'ventes.siret' },
-          { key: 'notes', label: 'ventes.notes', aliases: ['commentaire'] },
+          { key: 'companyName', label: 'Raison sociale', aliases: ['entreprise', 'société'] },
+          { key: 'firstName', label: 'Prénom', aliases: ['prenom'] },
+          { key: 'lastName', label: 'Nom', required: true, aliases: ['nom de famille'] },
+          { key: 'email', label: 'Email', aliases: ['e-mail', 'mail'] },
+          { key: 'phone', label: 'Téléphone', aliases: ['tel', 'portable'] },
+          { key: 'address', label: 'Adresse', aliases: ['rue'] },
+          { key: 'city', label: 'Ville' },
+          { key: 'postalCode', label: 'Code postal', aliases: ['cp', 'zip'] },
+          { key: 'country', label: 'Pays' },
+          { key: 'vatNumber', label: 'N° TVA', aliases: ['tva', 'vat'] },
+          { key: 'siret', label: 'SIRET' },
+          { key: 'notes', label: 'Notes', aliases: ['commentaire'] },
         ]}
         pastePlaceholder={"Nom;Prénom;Email;Téléphone;Adresse;Ville;Code postal;Pays\nDupont;Jean;jean@mail.com;+33612345678;12 rue de Paris;Paris;75001;France"}
         onImport={(rows) => {
@@ -803,7 +802,6 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
     quotes, activeClients, sendQuote, acceptQuote, refuseQuote, convertQuoteToInvoice,
     createQuote, updateQuote, deleteQuote, cancelQuote, showToast, sendQuoteByEmail, company, duplicateQuote,
   } = useData();
-  const { t } = useI18n();
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<DevisSortKey>('date');
   const [selectedQuoteId, setSelectedQuoteId] = useState<string | null>(null);
@@ -1025,7 +1023,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
           <Search size={18} color={colors.textTertiary} />
           <TextInput
             style={[styles.searchInput, { color: colors.text }]}
-            placeholder={t('ventes.searchQuote')}
+            placeholder="Rechercher un devis..."
             placeholderTextColor={colors.textTertiary}
             value={search}
             onChangeText={setSearch}
@@ -1229,10 +1227,10 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
       <FormModal
         visible={formVisible}
         onClose={() => setFormVisible(false)}
-        title={t('ventes.newQuote')}
+        title="Nouveau devis"
         subtitle="Créez un devis pour un client"
         onSubmit={handleSubmit}
-        submitLabel={t('ventes.createQuote')}
+        submitLabel="Créer le devis"
         width={600}
       >
         {formError ? (
@@ -1246,7 +1244,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
           if (selectedClient?.discountPercent) {
             return (
               <View style={[styles.discountBanner, { backgroundColor: '#F0FDF4', borderColor: '#BBF7D0' }]}>
-                <Text style={{ fontSize: 12, color: '#166534' }}>Remise client : {selectedClient.discountPercent}% ({selectedClient.discountCategory || 'Personnalis\u00e9e'}) — appliqu\u00e9e sur chaque ligne (modifiable)</Text>
+                <Text style={{ fontSize: 12, color: '#166534' }}>Remise client : {selectedClient.discountPercent}% ({selectedClient.discountCategory || 'Personnalisée'}) — appliquée sur chaque ligne (modifiable)</Text>
               </View>
             );
           }
@@ -1337,8 +1335,8 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
       <FormModal
         visible={editingQuoteId !== null}
         onClose={() => setEditingQuoteId(null)}
-        title={t('ventes.editQuote')}
-        subtitle={t('ventes.createQuote')}
+        title="Modifier le devis"
+        subtitle="Modifiez les informations du devis"
         onSubmit={handleEditSubmit}
         submitLabel="Mettre à jour"
         width={600}
@@ -1367,8 +1365,8 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
       <FormModal
         visible={emailModalVisible}
         onClose={() => setEmailModalVisible(false)}
-        title={t('ventes.emailQuote')}
-        subtitle={t('ventes.emailQuoteMsg')}
+        title="Envoyer le devis par email"
+        subtitle="Le devis sera envoyé au client"
         onSubmit={handleSendQuoteEmail}
         submitLabel="Envoyer"
       >
@@ -1432,7 +1430,6 @@ function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear 
     createCreditNote, company, activeClients, showToast,
     revertInvoiceStatus, updateInvoiceDueDate,
   } = useData();
-  const { t } = useI18n();
   const cur = company.currency || 'EUR';
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -1523,7 +1520,7 @@ function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear 
           <Search size={18} color={colors.textTertiary} />
           <TextInput
             style={[styles.searchInput, { color: colors.text }]}
-            placeholder={t('ventes.searchInvoice')}
+            placeholder="Rechercher une facture..."
             placeholderTextColor={colors.textTertiary}
             value={search}
             onChangeText={setSearch}
@@ -1837,7 +1834,7 @@ function RelancesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
   const [emailTo, setEmailTo] = useState('');
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
-  const { t } = useI18n();
+
   const buildReminderMessage = useCallback((inv: { clientName: string; invoiceNumber: string; totalTTC: number; paidAmount: number }) => {
     const remaining = inv.totalTTC - inv.paidAmount;
     const cur = company.currency || 'EUR';
@@ -1850,7 +1847,7 @@ function RelancesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
     const client = activeClients.find((c) => c.id === inv.clientId);
     const phone = client?.phone;
     if (!phone) {
-      showToast(t('ventes.clientNoPhone'), 'error');
+      showToast('Aucun numéro de téléphone pour ce client', 'error');
       return;
     }
     const message = buildReminderMessage(inv);
@@ -1873,7 +1870,7 @@ function RelancesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
     const client = activeClients.find((c) => c.id === inv.clientId);
     const phone = client?.phone?.replace(/\s/g, '').replace(/^0/, '+33');
     if (!phone) {
-      showToast(t('ventes.clientNoPhone'), 'error');
+      showToast('Aucun numéro de téléphone pour ce client', 'error');
       return;
     }
     const message = buildReminderMessage(inv);

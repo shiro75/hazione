@@ -52,7 +52,7 @@ function StockTabExportButton({ activeTab }: { activeTab: StockTab }) {
         { key: 'sku', label: 'SKU' },
         { key: 'stockQuantity', label: 'Stock actuel' },
         { key: 'lowStockThreshold', label: 'Seuil min' },
-        { key: 'unit', label: 'Unit\u00e9' },
+        { key: 'unit', label: 'Unité' },
         { key: 'salePrice', label: 'Prix vente' },
         { key: 'purchasePrice', label: 'Prix achat' },
       ];
@@ -66,8 +66,8 @@ function StockTabExportButton({ activeTab }: { activeTab: StockTab }) {
       const cols: ExportColumn<Record<string, unknown>>[] = [
         { key: 'productName', label: 'Produit' },
         { key: 'type', label: 'Type' },
-        { key: 'quantity', label: 'Quantit\u00e9' },
-        { key: 'reference', label: 'R\u00e9f\u00e9rence' },
+        { key: 'quantity', label: 'Quantité' },
+        { key: 'reference', label: 'Référence' },
         { key: 'notes', label: 'Notes' },
         { key: 'createdAt', label: 'Date' },
       ];
@@ -588,7 +588,7 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
           {filteredTransformed.map((product, i) => {
             const theoreticalStock = getTheoreticalStock(product);
             const hasRecipe = theoreticalStock !== null;
-            const stockLabel = hasRecipe ? `${theoreticalStock}` : '\u2014';
+            const stockLabel = hasRecipe ? `${theoreticalStock}` : '—';
             const statusColor = !hasRecipe ? colors.textTertiary : theoreticalStock <= 0 ? colors.danger : theoreticalStock <= product.lowStockThreshold ? colors.warning : colors.success;
             const statusBg = !hasRecipe ? colors.surfaceHover : theoreticalStock <= 0 ? colors.dangerLight : theoreticalStock <= product.lowStockThreshold ? colors.warningLight : colors.successLight;
             const statusLabel = !hasRecipe ? 'Sans recette' : theoreticalStock <= 0 ? 'Rupture' : theoreticalStock <= product.lowStockThreshold ? 'Bas' : 'OK';
@@ -680,11 +680,11 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
                         }
                         variantTheoreticalStock = minProducible === Infinity ? null : minProducible;
                       }
-                      const vStockLabel = variantTheoreticalStock !== null ? `${variantTheoreticalStock}` : '\u2014';
+                      const vStockLabel = variantTheoreticalStock !== null ? `${variantTheoreticalStock}` : '—';
                       const vStatusColor = variantTheoreticalStock === null ? colors.textTertiary : variantTheoreticalStock <= 0 ? colors.danger : variantTheoreticalStock <= product.lowStockThreshold ? colors.warning : colors.success;
                       const vStatusBg = variantTheoreticalStock === null ? colors.surfaceHover : variantTheoreticalStock <= 0 ? colors.dangerLight : variantTheoreticalStock <= product.lowStockThreshold ? colors.warningLight : colors.successLight;
                       const vStatusLabel = !variantHasRecipe ? 'Sans recette' : variantTheoreticalStock !== null && variantTheoreticalStock <= 0 ? 'Rupture' : variantTheoreticalStock !== null && variantTheoreticalStock <= product.lowStockThreshold ? 'Bas' : variantHasRecipe ? 'OK' : 'Sans recette';
-                      const attrLabel = Object.entries(variant.attributes).map(([k, val]) => `${k}: ${val}`).join(' \u00b7 ');
+                      const attrLabel = Object.entries(variant.attributes).map(([k, val]) => `${k}: ${val}`).join(' · ');
                       return (
                         <View
                           key={variant.id}
