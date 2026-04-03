@@ -8,7 +8,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'expo-router';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, useWindowDimensions, Switch } from 'react-native';
 import { Building2, FileText, Save, Bell, Zap, Shield, LayoutGrid, Lock, Check, LogOut, Trash2, AlertTriangle, ChevronDown, Key, Scale, ChevronRight, CreditCard } from 'lucide-react-native';
-import { Alert, Modal } from 'react-native';
+import { Modal } from 'react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -19,6 +19,7 @@ import PageHeader from '@/components/PageHeader';
 import AddressFields from '@/components/AddressFields';
 import PhoneField from '@/components/PhoneField';
 import { useI18n } from '@/contexts/I18nContext';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { useBanking, type PaymentProviderType } from '@/contexts/BankingContext';
 import { ActivityIndicator } from 'react-native';
 
@@ -136,6 +137,7 @@ function ApiKeysSection() {
 function BankingConfigSection() {
   const { colors } = useTheme();
   const { config, connectAccount, disconnectAccount } = useBanking();
+  const { successAlert, errorAlert, confirm } = useConfirm();
   const [connectingProvider, setConnectingProvider] = useState<PaymentProviderType>(null);
   const [accountIdInput, setAccountIdInput] = useState('');
   const [showConnectForm, setShowConnectForm] = useState(false);
@@ -150,16 +152,16 @@ function BankingConfigSection() {
       setShowConnectForm(false);
       setAccountIdInput('');
       setSelectedProvider(null);
-      Alert.alert('Connexion réussie', `Votre compte ${selectedProvider === 'stripe' ? 'Stripe' : 'CinetPay'} a été connecté avec succès.`);
+      successAlert('Connexion réussie', `Votre compte ${selectedProvider === 'stripe' ? 'Stripe' : 'CinetPay'} a été connecté avec succès.`);
     } catch {
-      Alert.alert('Erreur', 'Impossible de connecter le compte. Veuillez réessayer.');
+      errorAlert('Erreur', 'Impossible de connecter le compte. Veuillez réessayer.');
     } finally {
       setConnectingProvider(null);
     }
-  }, [selectedProvider, accountIdInput, connectAccount]);
+  }, [selectedProvider, accountIdInput, connectAccount, successAlert, errorAlert]);
 
   const handleDisconnect = React.useCallback(() => {
-    Alert.alert(
+    confirm(
       'Déconnecter',
       'Voulez-vous vraiment déconnecter votre compte de paiement ? Les paiements CB et Mobile Money seront désactivés.',
       [
@@ -167,7 +169,7 @@ function BankingConfigSection() {
         { text: 'Déconnecter', style: 'destructive', onPress: async () => { await disconnectAccount(); } },
       ]
     );
-  }, [disconnectAccount]);
+  }, [disconnectAccount, confirm]);
 
   return (
     <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
@@ -376,6 +378,7 @@ export default function SettingsScreen() {
   const { canAccess } = useRole();
   const { t } = useI18n();
   const router = useRouter();
+  const { errorAlert } = useConfirm();
 
   if (!canAccess('settings')) {
     return <AccessDenied />;
@@ -412,13 +415,13 @@ export default function SettingsScreen() {
         if (result.error === 'Mot de passe incorrect.') {
           setDeletePasswordError(t('settings.passwordIncorrect'));
         } else {
-          Alert.alert('Erreur', result.error || 'Impossible de supprimer le compte.');
+          errorAlert('Erreur', result.error || 'Impossible de supprimer le compte.');
         }
         setIsDeleting(false);
         return;
       }
     } catch {
-      Alert.alert('Erreur', 'Une erreur est survenue lors de la suppression.');
+      errorAlert('Erreur', 'Une erreur est survenue lors de la suppression.');
     } finally {
       setIsDeleting(false);
       setShowDeleteModal(false);

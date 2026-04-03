@@ -6,13 +6,14 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import {
   View, Text, StyleSheet, Modal, Pressable, TouchableOpacity,
-  TextInput, ScrollView, Linking, Platform, Alert,
+  TextInput, ScrollView, Linking, Platform,
 } from 'react-native';
 import {
   X, MessageSquare, Smartphone, User, Calendar,
   FileText, DollarSign, Send, AlertCircle, Clock, Pencil,
 } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { useData } from '@/contexts/DataContext';
 import { useI18n } from '@/contexts/I18nContext';
 import { formatCurrency, formatDate } from '@/utils/format';
@@ -30,6 +31,7 @@ export default function PaymentReminderSheet({
 }: PaymentReminderSheetProps) {
   const { colors } = useTheme();
   const { t } = useI18n();
+  const { errorAlert } = useConfirm();
   const { activeClients, company, logPaymentReminder, getClientReminderLogs } = useData();
   const cur = company.currency || 'EUR';
 
@@ -95,10 +97,10 @@ export default function PaymentReminderSheet({
     });
 
     Linking.openURL(url).catch(() => {
-      Alert.alert('Erreur', 'Impossible d\'ouvrir l\'application SMS');
+      errorAlert('Erreur', 'Impossible d\'ouvrir l\'application SMS');
     });
     onClose();
-  }, [hasPhone, invoice, client, clientPhone, message, logPaymentReminder, clientName, amountDue, onClose]);
+  }, [hasPhone, invoice, client, clientPhone, message, logPaymentReminder, clientName, amountDue, onClose, errorAlert]);
 
   const handleSendWhatsApp = useCallback(() => {
     if (!hasPhone || !invoice || !client) return;
@@ -119,10 +121,10 @@ export default function PaymentReminderSheet({
     });
 
     Linking.openURL(url).catch(() => {
-      Alert.alert('Erreur', 'Impossible d\'ouvrir WhatsApp');
+      errorAlert('Erreur', 'Impossible d\'ouvrir WhatsApp');
     });
     onClose();
-  }, [hasPhone, invoice, client, clientPhone, message, cleanPhone, logPaymentReminder, clientName, amountDue, onClose]);
+  }, [hasPhone, invoice, client, clientPhone, message, cleanPhone, logPaymentReminder, clientName, amountDue, onClose, errorAlert]);
 
   if (!invoice) return null;
 

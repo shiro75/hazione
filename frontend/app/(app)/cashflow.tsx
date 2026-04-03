@@ -5,7 +5,7 @@
  * Scrolls to top on tab change.
  */
 import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, Platform, Share, Alert } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, Platform, Share } from 'react-native';
 import { TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Wallet, AlertTriangle, Inbox, Download } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
@@ -13,6 +13,7 @@ import { useRole } from '@/contexts/RoleContext';
 import AccessDenied from '@/components/AccessDenied';
 import { formatCurrency, formatDate, generateFECExport } from '@/utils/format';
 import PageHeader from '@/components/PageHeader';
+import { useConfirm } from '@/contexts/ConfirmContext';
 
 type CashTab = 'overview' | 'movements' | 'journals';
 type MovementFilter = 'all' | 'income' | 'expense';
@@ -32,6 +33,7 @@ export default function CashFlowScreen() {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const { canAccess } = useRole();
+  const { successAlert, errorAlert } = useConfirm();
   const isMobile = width < 768;
   const [activeTab, setActiveTab] = useState<CashTab>('overview');
   const scrollRef = useRef<ScrollView>(null);
@@ -282,14 +284,14 @@ export default function CashFlowScreen() {
         a.download = `FEC_${new Date().toISOString().slice(0, 10)}.csv`;
         a.click();
         URL.revokeObjectURL(url);
-        Alert.alert('Export FEC', 'Fichier FEC téléchargé');
+        successAlert('Export FEC', 'Fichier FEC téléchargé');
       } else {
         await Share.share({ message: fecContent, title: 'Export FEC' });
       }
     } catch {
-      Alert.alert('Erreur', 'Impossible de générer l\'export FEC');
+      errorAlert('Erreur', 'Impossible de générer l\'export FEC');
     }
-  }, [allMovements, company, periodStart, now]);
+  }, [allMovements, company, periodStart, now, successAlert, errorAlert]);
 
   const TABS: { key: CashTab; label: string; icon: React.ComponentType<{ size: number; color: string }> }[] = [
     { key: 'overview', label: 'Vue d\'ensemble', icon: Wallet },

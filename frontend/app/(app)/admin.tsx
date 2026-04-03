@@ -4,7 +4,7 @@
  * usage statistics, and audit log filtering. Scrolls to top on tab change.
  */
 import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, Alert, TextInput } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, TextInput } from 'react-native';
 import { Shield, Users, CreditCard, BarChart3, UserPlus, Check, History, FileText, Mail, Send, Store, Crown, Gift, Key } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
@@ -17,6 +17,7 @@ import FormField from '@/components/FormField';
 import { SelectField } from '@/components/FormField';
 import type { AuditEntityType, UserRole } from '@/types';
 import { useI18n } from '@/contexts/I18nContext';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { useSubscription } from '@/contexts/SubscriptionContext';
 import { PLANS, PLAN_ORDER, getAnnualSavings, type PlanId, type BillingInterval } from '@/config/plans';
 
@@ -132,6 +133,7 @@ function SubscriptionTab({ isMobile }: { isMobile: boolean }) {
   const { colors } = useTheme();
   const { t, locale } = useI18n();
   const sub = useSubscription();
+  const { confirm } = useConfirm();
   const [billingInterval, setBillingInterval] = useState<BillingInterval>('monthly');
 
   const handleSelectPlan = useCallback((planId: PlanId) => {
@@ -140,7 +142,7 @@ function SubscriptionTab({ isMobile }: { isMobile: boolean }) {
   }, [sub, billingInterval]);
 
   const handleCancel = useCallback(() => {
-    Alert.alert(
+    confirm(
       t('subscription.cancelTitle'),
       t('subscription.cancelConfirm'),
       [
@@ -148,7 +150,7 @@ function SubscriptionTab({ isMobile }: { isMobile: boolean }) {
         { text: t('subscription.yes'), style: 'destructive', onPress: () => sub.cancelSubscription() },
       ]
     );
-  }, [sub, t]);
+  }, [sub, t, confirm]);
 
   return (
     <View style={subStyles.container}>
@@ -388,6 +390,7 @@ export default function AdminScreen() {
   const { auditLogs, invoices, clients, products, sales, currentPlan } = useData();
   const isMobile = width < 768;
   const { t } = useI18n();
+  const { successAlert } = useConfirm();
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
   const scrollRef = useRef<ScrollView>(null);
   const [auditFilter, setAuditFilter] = useState<AuditEntityType | 'all'>('all');
@@ -430,13 +433,12 @@ export default function AdminScreen() {
 
   const handleSubmitInvite = useCallback(() => {
     if (!validateInviteForm()) return;
-    Alert.alert(
+    successAlert(
       'Invitation envoyée',
       `Une invitation a été envoyée à ${inviteForm.email}`,
-      [{ text: 'OK' }]
     );
     handleCloseInvite();
-  }, [validateInviteForm, inviteForm, handleCloseInvite]);
+  }, [validateInviteForm, inviteForm, handleCloseInvite, successAlert]);
 
   const currentUser = useMemo(() => {
     if (!user) return null;

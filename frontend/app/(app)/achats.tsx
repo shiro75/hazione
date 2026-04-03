@@ -13,7 +13,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import {
   Search, Plus, Truck, FileText, ShoppingCart, X, Trash2,
-  Check, ArrowRight, PackageCheck, Clock, ChevronDown, ChevronUp, Upload, Download, ArrowUpDown, Paperclip, UserPlus, Ban,
+  Check, ArrowRight, PackageCheck, Clock, ChevronDown, ChevronUp, Upload, Download, ArrowUpDown, Paperclip, UserPlus, Ban, Copy,
 } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -187,6 +187,29 @@ function FournisseursSection({ isMobile }: { isMobile: boolean }) {
     setFormVisible(false);
   }, [form, editingId, createSupplier, updateSupplier]);
 
+  const handleDuplicate = useCallback(() => {
+    if (!editingId) return;
+    const supplier = activeSuppliers.find(s => s.id === editingId);
+    if (!supplier) return;
+    const data = {
+      companyName: supplier.companyName + ' - Copy',
+      email: supplier.email,
+      phone: supplier.phone,
+      address: supplier.address,
+      city: supplier.city,
+      postalCode: supplier.postalCode,
+      country: supplier.country,
+      vatNumber: supplier.vatNumber || '',
+      siret: supplier.siret || '',
+      notes: supplier.notes,
+      paymentConditions: supplier.paymentConditions,
+    };
+    const result = createSupplier(data);
+    if (result.success) {
+      setFormVisible(false);
+    }
+  }, [editingId, activeSuppliers, createSupplier]);
+
   const handleDelete = useCallback(() => {
     if (deleteConfirm) {
       deleteSupplier(deleteConfirm);
@@ -324,6 +347,9 @@ function FournisseursSection({ isMobile }: { isMobile: boolean }) {
         submitLabel={editingId ? 'Mettre à jour' : 'Créer'}
         headerActions={editingId ? (
           <>
+            <TouchableOpacity onPress={handleDuplicate} style={[styles.iconBtn, { backgroundColor: '#E8F5E9' }]}>
+              <Copy size={15} color="#2E7D32" />
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => { const s = activeSuppliers.find(sup => sup.id === editingId); if (s) { setFormVisible(false); setHistorySupplier(s); setHistoryVisible(true); } }} style={[styles.iconBtn, { backgroundColor: '#E0F2FE' }]}>
               <Clock size={15} color="#0369A1" />
             </TouchableOpacity>

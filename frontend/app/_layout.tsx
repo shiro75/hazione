@@ -11,6 +11,7 @@ import { DataProvider } from "@/contexts/DataContext";
 import { OfflineProvider } from "@/contexts/OfflineContext";
 import { SubscriptionProvider } from "@/contexts/SubscriptionContext";
 import { BankingProvider } from "@/contexts/BankingContext";
+import { ConfirmProvider, ConfirmModalRenderer } from "@/contexts/ConfirmContext";
 
 void SplashScreen.preventAutoHideAsync();
 
@@ -43,19 +44,22 @@ function AppProviders({ children }: { children: React.ReactNode }) {
   return (
     <I18nProvider>
       <ThemeProvider>
-        <AuthProvider>
-          <DataProvider>
-            <RoleProvider>
-              <OfflineProvider>
-                <SubscriptionProvider>
-                  <BankingProvider>
-                    {children}
-                  </BankingProvider>
-                </SubscriptionProvider>
-              </OfflineProvider>
-            </RoleProvider>
-          </DataProvider>
-        </AuthProvider>
+        <ConfirmProvider>
+          <AuthProvider>
+            <DataProvider>
+              <RoleProvider>
+                <OfflineProvider>
+                  <SubscriptionProvider>
+                    <BankingProvider>
+                      {children}
+                    </BankingProvider>
+                  </SubscriptionProvider>
+                </OfflineProvider>
+              </RoleProvider>
+            </DataProvider>
+          </AuthProvider>
+          <ConfirmModalRenderer />
+        </ConfirmProvider>
       </ThemeProvider>
     </I18nProvider>
   );

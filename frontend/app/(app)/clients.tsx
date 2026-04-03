@@ -7,7 +7,7 @@
  */
 import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput, useWindowDimensions } from 'react-native';
-import { Search, Plus, Mail, Phone, MapPin, Building, User, Pencil, Trash2, X, Clock, FileText, CreditCard, Bell, Upload } from 'lucide-react-native';
+import { Search, Plus, Mail, Phone, MapPin, Building, User, Pencil, Trash2, X, Clock, FileText, CreditCard, Bell, Upload, Copy } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import AddressFields from '@/components/AddressFields';
 import PhoneField from '@/components/PhoneField';
@@ -217,6 +217,34 @@ export default function ClientsScreen() {
       setDeleteConfirm(null);
     }
   }, [deleteConfirm, deleteClient, selectedClient]);
+
+  const handleDuplicate = useCallback(() => {
+    if (!editingId) return;
+    const client = activeClients.find(c => c.id === editingId);
+    if (!client) return;
+    const nameSuffix = ' - Copy';
+    const data = {
+      type: client.type,
+      companyName: client.companyName ? client.companyName + nameSuffix : '',
+      firstName: client.firstName + (client.type === 'individual' ? nameSuffix : ''),
+      lastName: client.lastName,
+      email: client.email,
+      phone: client.phone,
+      address: client.address,
+      city: client.city,
+      postalCode: client.postalCode,
+      country: client.country,
+      vatNumber: client.vatNumber || undefined,
+      siret: client.siret || undefined,
+      notes: client.notes,
+      discountPercent: client.discountPercent,
+      discountCategory: client.discountCategory || undefined,
+    };
+    const result = createClient(data);
+    if (result.success) {
+      setFormVisible(false);
+    }
+  }, [editingId, activeClients, createClient]);
 
   const updateField = useCallback(<K extends keyof typeof EMPTY_FORM>(key: K, value: typeof EMPTY_FORM[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -461,6 +489,16 @@ export default function ClientsScreen() {
         subtitle={editingId ? 'Mettre à jour les informations du client' : 'Remplissez les informations du nouveau client'}
         onSubmit={handleSubmit}
         submitLabel={editingId ? 'Mettre à jour' : 'Créer le client'}
+        headerActions={editingId ? (
+          <>
+            <TouchableOpacity onPress={handleDuplicate} style={[styles.iconBtn, { backgroundColor: '#E0F2FE' }]} hitSlop={6}>
+              <Copy size={15} color="#0369A1" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setFormVisible(false); setDeleteConfirm(editingId); }} style={[styles.iconBtn, { backgroundColor: colors.dangerLight }]} hitSlop={6}>
+              <Trash2 size={15} color={colors.danger} />
+            </TouchableOpacity>
+          </>
+        ) : undefined}
       >
         {formError ? (
           <View style={[styles.errorBanner, { backgroundColor: colors.dangerLight }]}>

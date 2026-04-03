@@ -17,7 +17,7 @@ export const PRODUCT_TYPE_CONFIGS: ProductTypeConfig[] = [
   { value: 'consommable', labelKey: 'stock.consumable', color: '#F1C40F', bgColor: '#FEF9E7' },
   { value: 'produit_transforme', labelKey: 'stock.transformedProduct', color: '#3498DB', bgColor: '#EBF5FB' },
   { value: 'produit_revendu', labelKey: 'stock.resoldProduct', color: '#9B59B6', bgColor: '#F5EEF8' },
-  { value: 'service', labelKey: 'service', color: '#27AE60', bgColor: '#EAFAF1' },
+  { value: 'service', labelKey: 'stock.service', color: '#27AE60', bgColor: '#EAFAF1' },
 ];
 
 

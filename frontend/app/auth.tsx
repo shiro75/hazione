@@ -10,9 +10,9 @@ import {
   ScrollView,
   Animated,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
   Mail,
@@ -66,6 +66,7 @@ export default function AuthScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { signIn, signUp, resetPassword } = useAuth();
+  const { successAlert } = useConfirm();
 
   const [mode, setMode] = useState<AuthMode>('login');
   const [registerStep, setRegisterStep] = useState<RegisterStep>(1);
@@ -339,17 +340,17 @@ export default function AuthScreen() {
           setError(result.error ?? 'Erreur lors de l\'envoi');
           triggerShake();
         } else {
-          Alert.alert(
+          successAlert(
             'Email envoyé',
             'Si un compte existe avec cet email, vous recevrez un lien de réinitialisation.',
-            [{ text: 'OK', onPress: () => switchMode('login') }]
+            () => switchMode('login'),
           );
         }
       }
     } finally {
       setIsSubmitting(false);
     }
-  }, [mode, email, password, validateLogin, validateForgot, signIn, resetPassword, triggerShake, switchMode, router]);
+  }, [mode, email, password, validateLogin, validateForgot, signIn, resetPassword, triggerShake, switchMode, router, successAlert]);
 
   const handleRegisterSubmit = useCallback(async () => {
     setError('');
@@ -376,16 +377,16 @@ export default function AuthScreen() {
         }
         triggerShake();
       } else {
-        Alert.alert(
-          'Inscription réussie',
-          'Un email de confirmation vous a été envoyé. Veuillez valider votre compte avant de vous connecter.',
-          [{ text: 'OK', onPress: () => switchMode('login') }]
+        successAlert(
+          'Inscription réussie !',
+          'Votre compte a été créé avec succès. Un email de confirmation vous a été envoyé. Pensez à vérifier vos spams si vous ne le trouvez pas dans votre boîte de réception. Validez votre email puis connectez-vous.',
+          () => switchMode('login'),
         );
       }
     } finally {
       setIsSubmitting(false);
     }
-  }, [email, password, fullName, selectedPlan, companyName, sector, siret, address, postalCode, city, country, phone, signUp, triggerShake, switchMode]);
+  }, [email, password, fullName, selectedPlan, companyName, sector, siret, address, postalCode, city, country, phone, signUp, triggerShake, switchMode, successAlert]);
 
   const title = mode === 'login' ? 'Connexion' : 'Mot de passe oublié';
   const subtitle = mode === 'login'

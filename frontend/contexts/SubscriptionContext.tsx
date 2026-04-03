@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import createContextHook from '@nkzw/create-context-hook';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Alert, Linking, Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 import { supabase, isSupabaseConfigured } from '@/services/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -65,6 +65,7 @@ export const [SubscriptionProvider, useSubscription] = createContextHook((): Sub
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const userId = user?.id ?? '';
+  const [_paymentError, setPaymentError] = useState<string | null>(null);
 
   const [plan, setPlan] = useState<PlanId>(DEFAULT_TRIAL_PLAN);
   const [status, setStatus] = useState<SubscriptionStatus>('trial');
@@ -222,7 +223,7 @@ export const [SubscriptionProvider, useSubscription] = createContextHook((): Sub
       try {
         await Linking.openURL(checkoutUrl);
       } catch {
-        Alert.alert('Erreur', 'Impossible d\'ouvrir la page de paiement.');
+        setPaymentError('Impossible d\'ouvrir la page de paiement.');
       }
     }
   }, [userId]);

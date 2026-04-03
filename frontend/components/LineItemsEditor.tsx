@@ -53,7 +53,7 @@ export default React.memo(function LineItemsEditor({ items, onItemsChange, idPre
   const [lineSearches, setLineSearches] = useState<Record<number, string>>({});
 
   const getFilteredProducts = useCallback((idx: number) => {
-    let base = activeProducts;
+    let base = activeProducts.filter((p) => p.isAvailableForSale !== false);
     if (allowedProductTypes && allowedProductTypes.length > 0) {
       base = base.filter((p) => allowedProductTypes.includes(p.type));
     }

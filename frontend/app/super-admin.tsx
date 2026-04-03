@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
-  ActivityIndicator, Alert, Modal,
+  ActivityIndicator, Modal,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,6 +22,7 @@ import {
   type AdminLicense, type AdminUser, type AdminStats, type LicenseUser,
 } from '@/services/superAdminService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useConfirm } from '@/contexts/ConfirmContext';
 
 const ADMIN_PIN_KEY = '@hazione_admin_pin';
 const DEFAULT_PIN = '000000';
@@ -39,6 +40,7 @@ export default function SuperAdminScreen() {
   const { user } = useAuth();
   const { t } = useI18n();
   const router = useRouter();
+  const { errorAlert, confirm } = useConfirm();
   const insets = useSafeAreaInsets();
 
   const [isVerifying, setIsVerifying] = useState<boolean>(true);
@@ -127,25 +129,23 @@ export default function SuperAdminScreen() {
         setGenMaxUsers('5');
         if (user?.id) await logAdminAccess(user.id, `generate_license_${genPlan}_${genDuration}_${maxUsers}users`);
       } else {
-        Alert.alert(
+        errorAlert(
           t('superAdmin.error') || 'Erreur',
           t('superAdmin.licenseCreateError') || 'Impossible de créer la licence. Vérifiez que la table "licenses" existe dans Supabase et que les permissions RLS sont correctes.',
-          [{ text: 'OK' }]
         );
       }
     } catch (e) {
-      Alert.alert(
+      errorAlert(
         t('superAdmin.error') || 'Erreur',
         String(e) || 'Une erreur inattendue est survenue.',
-        [{ text: 'OK' }]
       );
     } finally {
       setIsGenerating(false);
     }
-  }, [genPlan, genDuration, genMaxUsers, user?.id, t]);
+  }, [genPlan, genDuration, genMaxUsers, user?.id, t, errorAlert]);
 
   const handleRevoke = useCallback(async (lic: AdminLicense) => {
-    Alert.alert(t('superAdmin.revoke'), `${lic.code}`, [
+    confirm(t('superAdmin.revoke'), `${lic.code}`, [
       { text: t('subscription.no'), style: 'cancel' },
       {
         text: t('superAdmin.revoke'), style: 'destructive', onPress: async () => {
@@ -156,10 +156,10 @@ export default function SuperAdminScreen() {
         },
       },
     ]);
-  }, [t]);
+  }, [t, confirm]);
 
   const handleDelete = useCallback(async (lic: AdminLicense) => {
-    Alert.alert(t('superAdmin.deleteLicense'), `${lic.code}`, [
+    confirm(t('superAdmin.deleteLicense'), `${lic.code}`, [
       { text: t('subscription.no'), style: 'cancel' },
       {
         text: t('superAdmin.delete'), style: 'destructive', onPress: async () => {
@@ -170,10 +170,10 @@ export default function SuperAdminScreen() {
         },
       },
     ]);
-  }, [t]);
+  }, [t, confirm]);
 
   const handleRemoveUser = useCallback(async (licenseId: string, licUser: LicenseUser) => {
-    Alert.alert(t('superAdmin.removeUser'), licUser.email || licUser.full_name, [
+    confirm(t('superAdmin.removeUser'), licUser.email || licUser.full_name, [
       { text: t('subscription.no'), style: 'cancel' },
       {
         text: t('superAdmin.remove'), style: 'destructive', onPress: async () => {
@@ -188,7 +188,7 @@ export default function SuperAdminScreen() {
         },
       },
     ]);
-  }, [t]);
+  }, [t, confirm]);
 
   const handleCopy = useCallback(async (code: string) => {
     try {

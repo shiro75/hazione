@@ -26,7 +26,7 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, useWindowDimensions,
-  TouchableOpacity, Platform, Share, Alert, LayoutAnimation,
+  TouchableOpacity, Platform, Share, LayoutAnimation,
 } from 'react-native';
 import {
   FileText, Clock, ArrowUpRight, ArrowDownRight,
@@ -57,13 +57,14 @@ import {
 } from '@/components/charts/DashboardCharts';
 import { useI18n } from '@/contexts/I18nContext';
 import { SPACING, TYPOGRAPHY, RADIUS, SHADOWS, SEMANTIC_COLORS } from '@/constants/theme';
+import { useConfirm } from '@/contexts/ConfirmContext';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES ET CONSTANTES
 // ─────────────────────────────────────────────────────────────────────────────
 
 type DashboardTab = 'overview' | 'analysis' | 'treasury';
-type PeriodFilter = 'today' | 'month' | 'quarter' | 'year';
+type PeriodFilter = 'today' | 'week' | 'month' | 'quarter' | 'year';
 type MovementFilter = 'all' | 'income' | 'expense';
 
 interface RealMovement {
@@ -83,6 +84,7 @@ const DASHBOARD_TAB_KEYS: { key: DashboardTab; labelKey: string; icon: React.Com
 
 const PERIOD_OPTION_KEYS: { key: PeriodFilter; labelKey: string }[] = [
   { key: 'today', labelKey: 'dashboard.today' },
+  { key: 'week', labelKey: 'dashboard.thisWeek' },
   { key: 'month', labelKey: 'dashboard.thisMonth' },
   { key: 'quarter', labelKey: 'dashboard.thisQuarter' },
   { key: 'year', labelKey: 'dashboard.thisYear' },
@@ -123,6 +125,11 @@ function getPeriodStart(now: Date, period: PeriodFilter): Date {
   const y = now.getFullYear();
   const m = now.getMonth();
   if (period === 'today') return new Date(y, m, now.getDate());
+  if (period === 'week') {
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    return new Date(y, m, now.getDate() - mondayOffset);
+  }
   if (period === 'month') return new Date(y, m, 1);
   if (period === 'quarter') return new Date(y, Math.floor(m / 3) * 3, 1);
   return new Date(y, 0, 1);
@@ -134,6 +141,14 @@ function getPreviousPeriodRange(now: Date, period: PeriodFilter): { start: Date;
   if (period === 'today') {
     const yesterday = new Date(y, m, now.getDate() - 1);
     return { start: yesterday, end: new Date(y, m, now.getDate()) };
+  }
+  if (period === 'week') {
+    const dayOfWeek = now.getDay();
+    const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const thisMonday = new Date(y, m, now.getDate() - mondayOffset);
+    const prevMonday = new Date(thisMonday);
+    prevMonday.setDate(prevMonday.getDate() - 7);
+    return { start: prevMonday, end: thisMonday };
   }
   if (period === 'month') return { start: new Date(y, m - 1, 1), end: new Date(y, m, 1) };
   if (period === 'quarter') {
@@ -184,11 +199,12 @@ export default function DashboardScreen() {
   const isMobile = width < 768;
   const { user } = useAuth();
   const { t, locale } = useI18n();
+  const { successAlert, errorAlert } = useConfirm();
 
   const {
     invoices, lowStockProducts, activeProducts,
     activeSupplierInvoices, cashMovements, sales, company, clients,
-    activePurchaseOrders,
+    activePurchaseOrders, getVariantsForProduct, productAttributes,
   } = useData();
 
   const cur = company.currency || 'XOF';
@@ -211,6 +227,8 @@ export default function DashboardScreen() {
   const [movementFilter, setMovementFilter] = useState<MovementFilter>('all');
   const [showMovements, setShowMovements] = useState(false);
   const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [donutCollapseFlag, setDonutCollapseFlag] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const { simplifiedDashboard } = useRole();
 
@@ -362,24 +380,94 @@ export default function DashboardScreen() {
   // DONNEES VUE D'ENSEMBLE
   // ─────────────────────────────────────────────────────────────────────────
 
-  /** CA par semaine sur 8 semaines glissantes */
-  const weeklyData = useMemo(() => {
-    const weeks: { label: string; revenue: number; isCurrent: boolean }[] = [];
+  const periodChartData = useMemo(() => {
+    const bars: { label: string; revenue: number; isCurrent: boolean }[] = [];
     const convertedIds = new Set(sales.filter(s => s.convertedToInvoiceId).map(s => s.convertedToInvoiceId!));
-    for (let w = 7; w >= 0; w--) {
-      const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate() - (w * 7));
-      const weekStart = new Date(weekEnd); weekStart.setDate(weekStart.getDate() - 7);
-      const sISO = weekStart.toISOString(); const eISO = weekEnd.toISOString();
-      const label = `S${Math.ceil((weekEnd.getTime() - new Date(weekEnd.getFullYear(), 0, 1).getTime()) / (7 * 86400000))}`;
+
+    const calcRevenue = (sISO: string, eISO: string) => {
+      if (selectedCategory) {
+        const getItemRevForCategory = (items: { productId?: string; totalTTC: number }[]) => {
+          return items.reduce((sum, item) => {
+            const product = activeProducts.find(p => p.id === item.productId);
+            const catName = product?.categoryName || 'Autres';
+            if (catName === selectedCategory) return sum + item.totalTTC;
+            return sum;
+          }, 0);
+        };
+        const invRev = invoices.filter(i => i.status === 'paid' && i.issueDate >= sISO && i.issueDate < eISO).reduce((s2, i) => s2 + getItemRevForCategory(i.items), 0);
+        const saleRev = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= sISO && s2.createdAt < eISO && (!s2.convertedToInvoiceId || !convertedIds.has(s2.convertedToInvoiceId))).reduce((s3, sale) => s3 + getItemRevForCategory(sale.items), 0);
+        return invRev + saleRev;
+      }
       const invRev = invoices.filter(i => i.status === 'paid' && i.issueDate >= sISO && i.issueDate < eISO).reduce((s2, i) => s2 + i.totalTTC, 0);
       const saleRev = sales.filter(s2 => s2.status === 'paid' && s2.createdAt >= sISO && s2.createdAt < eISO && (!s2.convertedToInvoiceId || !convertedIds.has(s2.convertedToInvoiceId))).reduce((s3, sale) => s3 + sale.totalTTC, 0);
-      weeks.push({ label, revenue: invRev + saleRev, isCurrent: w === 0 });
-    }
-    return weeks;
-  }, [invoices, sales, now]);
+      return invRev + saleRev;
+    };
 
-  const weeklyMax = useMemo(() => Math.max(...weeklyData.map(w => w.revenue), 1), [weeklyData]);
-  const hasWeeklyData = weeklyData.some(w => w.revenue > 0);
+    const loc = locale === 'en' ? 'en-US' : 'fr-FR';
+
+    if (period === 'today') {
+      for (let h = 0; h < 24; h += 3) {
+        const slotStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h);
+        const slotEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h + 3);
+        const label = `${h}h`;
+        bars.push({ label, revenue: calcRevenue(slotStart.toISOString(), slotEnd.toISOString()), isCurrent: now.getHours() >= h && now.getHours() < h + 3 });
+      }
+    } else if (period === 'week') {
+      const dayOfWeek = now.getDay();
+      const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset);
+      const dayNames = locale === 'en' ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] : ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+      for (let d = 0; d < 7; d++) {
+        const dayStart = new Date(monday); dayStart.setDate(monday.getDate() + d);
+        const dayEnd = new Date(dayStart); dayEnd.setDate(dayStart.getDate() + 1);
+        bars.push({ label: dayNames[d], revenue: calcRevenue(dayStart.toISOString(), dayEnd.toISOString()), isCurrent: dayStart.getDate() === now.getDate() && dayStart.getMonth() === now.getMonth() });
+      }
+    } else if (period === 'month') {
+      for (let w = 4; w >= 0; w--) {
+        const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate() - (w * 7));
+        const weekStart = new Date(weekEnd); weekStart.setDate(weekStart.getDate() - 7);
+        const label = `S${Math.ceil((weekEnd.getTime() - new Date(weekEnd.getFullYear(), 0, 1).getTime()) / (7 * 86400000))}`;
+        bars.push({ label, revenue: calcRevenue(weekStart.toISOString(), weekEnd.toISOString()), isCurrent: w === 0 });
+      }
+    } else if (period === 'quarter') {
+      const qStart = Math.floor(now.getMonth() / 3) * 3;
+      for (let m = 0; m < 3; m++) {
+        const mStart = new Date(now.getFullYear(), qStart + m, 1);
+        const mEnd = new Date(now.getFullYear(), qStart + m + 1, 1);
+        const label = mStart.toLocaleDateString(loc, { month: 'short' }).replace('.', '');
+        bars.push({ label, revenue: calcRevenue(mStart.toISOString(), mEnd.toISOString()), isCurrent: mStart.getMonth() === now.getMonth() });
+      }
+    } else {
+      for (let m = 0; m < 12; m++) {
+        const mStart = new Date(now.getFullYear(), m, 1);
+        const mEnd = new Date(now.getFullYear(), m + 1, 1);
+        const label = mStart.toLocaleDateString(loc, { month: 'short' }).replace('.', '');
+        bars.push({ label, revenue: calcRevenue(mStart.toISOString(), mEnd.toISOString()), isCurrent: mStart.getMonth() === now.getMonth() });
+      }
+    }
+    return bars;
+  }, [invoices, sales, now, period, locale, selectedCategory, activeProducts]);
+
+  const periodChartMax = useMemo(() => Math.max(...periodChartData.map(w => w.revenue), 1), [periodChartData]);
+  const hasPeriodChartData = periodChartData.some(w => w.revenue > 0);
+
+  const periodChartTitle = useMemo(() => {
+    const base = period === 'today' ? t('dashboard.todayRevenue')
+      : period === 'week' ? t('dashboard.thisWeek')
+      : period === 'month' ? t('dashboard.weeklyRevenue')
+      : period === 'quarter' ? t('dashboard.thisQuarter')
+      : t('dashboard.thisYear');
+    if (selectedCategory) return `${base} — ${selectedCategory}`;
+    return base;
+  }, [period, t, selectedCategory]);
+
+  const periodChartSubtitle = useMemo(() => {
+    if (period === 'today') return t('dashboard.periodDaily');
+    if (period === 'week') return t('dashboard.periodDaily');
+    if (period === 'month') return t('dashboard.periodWeekly');
+    if (period === 'quarter') return t('dashboard.periodMonthly');
+    return t('dashboard.periodMonthly');
+  }, [period, t]);
 
   /** 5 dernieres ventes toutes sources confondues */
   const recentSales = useMemo(() => {
@@ -403,21 +491,164 @@ export default function DashboardScreen() {
 
   /** Donut repartition ventes par categorie produit */
   const categoryBreakdown = useMemo((): DonutSegment[] => {
-    const catMap = new Map<string, { label: string; value: number }>();
-    const processSaleItems = (items: { productId?: string; totalTTC: number }[]) => {
-      for (const item of items) {
-        const product = activeProducts.find(p => p.id === item.productId);
-        const catName = product?.categoryName || 'Autres';
-        const existing = catMap.get(catName) || { label: catName, value: 0 };
-        existing.value += item.totalTTC;
-        catMap.set(catName, existing);
-      }
-    };
+    const catMap = new Map<string, { label: string; value: number; quantity: number }>();
+    const processSaleItems = (items: { productId?: string; totalTTC: number; quantity?: number }[]) => {
+        for (const item of items) {
+          const product = activeProducts.find(p => p.id === item.productId);
+          const catName = product?.categoryName || 'Autres';
+          const existing = catMap.get(catName) || { label: catName, value: 0, quantity: 0 };
+          existing.value += item.totalTTC;
+          existing.quantity += (item.quantity || 1);
+          catMap.set(catName, existing);
+        }
+      };
     sales.filter(s => s.status === 'paid' && s.createdAt >= periodStart).forEach(s => processSaleItems(s.items));
     invoices.filter(i => i.status === 'paid' && i.issueDate >= periodStart).forEach(i => processSaleItems(i.items));
     return Array.from(catMap.values()).sort((a, b) => b.value - a.value).slice(0, 7)
-      .map((item, idx) => ({ ...item, color: DONUT_PALETTE[idx % DONUT_PALETTE.length] }));
-  }, [sales, invoices, activeProducts, periodStart]);
+        .map((item, idx) => ({ ...item, color: DONUT_PALETTE[idx % DONUT_PALETTE.length] }));
+    }, [sales, invoices, activeProducts, periodStart]);
+
+    /** Détail des ventes par catégorie - pour l'expansion dans la légende */
+  interface VariantDetail {
+    variantId: string;
+    attributes: Record<string, string>;
+    attributeLabel: string;
+  }
+
+  interface VariantSaleDetail {
+    variantId: string;
+    attributeLabel: string;
+    quantity: number;
+    totalTTC: number;
+    unitPrice?: number;
+  }
+
+  interface ProductSaleDetail {
+    productId: string;
+    productName: string;
+    quantity: number;
+    totalTTC: number;
+    attributes: string;
+    unitPrice?: number;
+    totalHT?: number;
+    totalTVA?: number;
+    variants: VariantDetail[];
+    variantSales: VariantSaleDetail[];
+  }
+
+  const getProductVariantDetails = useCallback((productId: string): VariantDetail[] => {
+    const variants = getVariantsForProduct(productId);
+    if (variants.length === 0) return [];
+    const sortedAttrs = [...productAttributes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return variants.map(v => {
+      const parts: string[] = [];
+      for (const attr of sortedAttrs) {
+        const val = v.attributes[attr.name];
+        if (val) parts.push(`${attr.name}: ${val}`);
+      }
+      const extraKeys = Object.keys(v.attributes).filter(k => !sortedAttrs.some(a => a.name === k));
+      for (const k of extraKeys) {
+        parts.push(`${k}: ${v.attributes[k]}`);
+      }
+      return {
+        variantId: v.id,
+        attributes: v.attributes,
+        attributeLabel: parts.join(', '),
+      };
+    });
+  }, [getVariantsForProduct, productAttributes]);
+
+const getVariantLabel = useCallback((productId: string, variantId: string): string => {
+    const allVariants = getVariantsForProduct(productId);
+    const variant = allVariants.find(v => v.id === variantId);
+    if (!variant) return '';
+    const sortedAttrs = [...productAttributes].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const parts: string[] = [];
+    for (const attr of sortedAttrs) {
+      const val = variant.attributes[attr.name];
+      if (val) parts.push(`${attr.name}: ${val}`);
+    }
+    const extraKeys = Object.keys(variant.attributes).filter(k => !sortedAttrs.some(a => a.name === k));
+    for (const k of extraKeys) {
+      parts.push(`${k}: ${variant.attributes[k]}`);
+    }
+    return parts.join(', ');
+  }, [getVariantsForProduct, productAttributes]);
+
+const salesDetailsByCategory = useMemo(() => {
+  const detailsMap = new Map<string, Array<ProductSaleDetail>>();
+
+  const processItems = (items: Array<{ productId: string; productName: string; quantity: number; totalTTC: number; unitPrice: number; totalHT: number; totalTVA: number; [key: string]: unknown }>) => {
+    for (const item of items) {
+      const product = activeProducts.find(p => p.id === item.productId);
+      const catName = product?.categoryName || 'Autres';
+      if (!detailsMap.has(catName)) {
+        detailsMap.set(catName, []);
+      }
+      const existing = detailsMap.get(catName)!;
+      const existingProduct = existing.find(p => p.productId === item.productId);
+      const itemVariantId = (item as { variantId?: string }).variantId;
+      if (existingProduct) {
+        existingProduct.quantity += item.quantity;
+        existingProduct.totalTTC += item.totalTTC;
+        if (item.totalHT) existingProduct.totalHT = (existingProduct.totalHT || 0) + item.totalHT;
+        if (item.totalTVA) existingProduct.totalTVA = (existingProduct.totalTVA || 0) + item.totalTVA;
+        if (itemVariantId) {
+          const existingVarSale = existingProduct.variantSales.find(vs => vs.variantId === itemVariantId);
+          if (existingVarSale) {
+            existingVarSale.quantity += item.quantity;
+            existingVarSale.totalTTC += item.totalTTC;
+          } else {
+            existingProduct.variantSales.push({
+              variantId: itemVariantId,
+              attributeLabel: getVariantLabel(item.productId, itemVariantId),
+              quantity: item.quantity,
+              totalTTC: item.totalTTC,
+              unitPrice: item.unitPrice,
+            });
+          }
+        }
+      } else {
+        const variantSales: VariantSaleDetail[] = [];
+        if (itemVariantId) {
+          variantSales.push({
+            variantId: itemVariantId,
+            attributeLabel: getVariantLabel(item.productId, itemVariantId),
+            quantity: item.quantity,
+            totalTTC: item.totalTTC,
+            unitPrice: item.unitPrice,
+          });
+        }
+        existing.push({
+          productId: item.productId || '',
+          productName: item.productName,
+          quantity: item.quantity,
+          totalTTC: item.totalTTC,
+          attributes: '',
+          unitPrice: item.unitPrice,
+          totalHT: item.totalHT,
+          totalTVA: item.totalTVA,
+          variants: getProductVariantDetails(item.productId),
+          variantSales,
+        });
+      }
+    }
+  };
+
+  sales.filter(s => s.status === 'paid' && s.createdAt >= periodStart).forEach(sale => {
+    processItems(sale.items as any);
+  });
+
+  invoices.filter(i => i.status === 'paid' && i.issueDate >= periodStart).forEach(invoice => {
+    processItems(invoice.items as any);
+  });
+
+  const result = new Map<string, Array<ProductSaleDetail>>();
+  for (const [catName, products] of detailsMap) {
+    result.set(catName, products.sort((a, b) => b.totalTTC - a.totalTTC));
+  }
+  return result;
+}, [sales, invoices, activeProducts, periodStart, getProductVariantDetails, getVariantLabel]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DONNEES ONGLET ANALYSE
@@ -665,15 +896,15 @@ export default function DashboardScreen() {
         const a = document.createElement('a');
         a.href = url; a.download = `FEC_${new Date().toISOString().slice(0, 10)}.csv`; a.click();
         URL.revokeObjectURL(url);
-        Alert.alert('Export FEC', 'Fichier FEC telecharge');
+        successAlert('Export FEC', 'Fichier FEC telecharge');
       } else {
         await Share.share({ message: fecContent, title: 'Export FEC' });
       }
-    } catch { Alert.alert('Erreur', "Impossible de generer l'export FEC"); }
-  }, [allMovements, company, treasuryPeriodStart, now, cur]);
+    } catch { errorAlert('Erreur', "Impossible de generer l'export FEC"); }
+  }, [allMovements, company, treasuryPeriodStart, now, cur, successAlert, errorAlert]);
 
   const handleExportSalesReport = useCallback(async () => {
-    const periodLabels: Record<PeriodFilter, string> = { today: "Aujourd'hui", month: 'Ce mois', quarter: 'Ce trimestre', year: 'Cette annee' };
+    const periodLabels: Record<PeriodFilter, string> = { today: "Aujourd'hui", week: 'Cette semaine', month: 'Ce mois', quarter: 'Ce trimestre', year: 'Cette annee' };
     const html = generateSalesReportHTML({ company, sales, invoices, clients, periodLabel: periodLabels[period], currency: cur });
     await generateAndSharePDF(html, `Rapport_Ventes_${new Date().toISOString().slice(0, 10)}.pdf`);
   }, [company, sales, invoices, clients, period, cur]);
@@ -684,7 +915,7 @@ export default function DashboardScreen() {
   }, [company, cur, activeProducts]);
 
   const handleExportFinancialReport = useCallback(async () => {
-    const periodLabels: Record<PeriodFilter, string> = { today: "Aujourd'hui", month: 'Ce mois', quarter: 'Ce trimestre', year: 'Cette annee' };
+    const periodLabels: Record<PeriodFilter, string> = { today: "Aujourd'hui", week: 'Cette semaine', month: 'Ce mois', quarter: 'Ce trimestre', year: 'Cette annee' };
     const html = generateFinancialReportHTML({ company, revenue: monthlyRevenue, expenses: monthlyExpenses, unpaidAmount, periodLabel: periodLabels[period], currency: cur });
     await generateAndSharePDF(html, `Rapport_Financier_${new Date().toISOString().slice(0, 10)}.pdf`);
   }, [company, monthlyRevenue, monthlyExpenses, unpaidAmount, period, cur]);
@@ -692,22 +923,6 @@ export default function DashboardScreen() {
   // ─────────────────────────────────────────────────────────────────────────
   // SOUS-RENDUS COMMUNS
   // ─────────────────────────────────────────────────────────────────────────
-
-  /** Selecteur de periode (Aujourd'hui / Ce mois / Ce trimestre / Cette annee) */
-  const renderPeriodSelector = () => (
-    <View style={styles.periodRow}>
-      {PERIOD_OPTION_KEYS.map((opt) => (
-        <TouchableOpacity
-          key={opt.key}
-          style={[styles.periodPill, { backgroundColor: period === opt.key ? colors.primary : colors.card, borderColor: period === opt.key ? colors.primary : colors.cardBorder }]}
-          onPress={() => setPeriod(opt.key)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.periodText, { color: period === opt.key ? SEMANTIC_COLORS.WHITE : colors.textSecondary }]}>{t(opt.labelKey)}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
 
   /**
    * Banniere CA du jour avec badge nombre de ventes.
@@ -754,7 +969,7 @@ export default function DashboardScreen() {
     return (
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.actionRow} contentContainerStyle={styles.actionRowContent}>
         {criticalStock > 0 && (
-          <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]} onPress={() => router.push('/stock')} activeOpacity={0.7}>
+          <TouchableOpacity style={[styles.actionCard, { backgroundColor: '#FEF2F2', borderColor: '#FECACA' }]} onPress={() => router.push('/stock?tab=inventaire' as never)} activeOpacity={0.7}>
             <View style={styles.actionCardInner}>
               <AlertTriangle size={16} color="#DC2626" />
               <Text style={[styles.actionCardText, { color: '#DC2626' }]} numberOfLines={2}>{t('dashboard.criticalStock', { count: criticalStock })}</Text>
@@ -867,15 +1082,26 @@ export default function DashboardScreen() {
                   )}
                   <View style={styles.saleDetailSection}>
                     <Text style={[styles.saleDetailLabel, { color: colors.textTertiary }]}>Articles</Text>
-                    {sale.items.map((item, i) => (
-                      <View key={item.id || i} style={[styles.saleDetailItem, i < sale.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.saleDetailItemName, { color: colors.text }]} numberOfLines={1}>{item.productName}</Text>
-                          <Text style={[styles.saleDetailSub, { color: colors.textTertiary }]}>{item.quantity} x {formatCurrency(item.unitPrice, cur)}</Text>
+                    {sale.items.map((item, i) => {
+                      const itemVariantId = (item as { variantId?: string }).variantId;
+                      const variantLabel = itemVariantId ? getVariantLabel(item.productId, itemVariantId) : '';
+                      return (
+                        <View key={item.id || i} style={[styles.saleDetailItem, i < sale.items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.saleDetailItemName, { color: colors.text }]} numberOfLines={1}>{item.productName}</Text>
+                            {variantLabel ? (
+                              <View style={[styles.variantAttrList, { paddingLeft: 0, marginTop: 3, paddingBottom: 2 }]}>
+                                <View style={[styles.variantAttrChip, { backgroundColor: `${colors.primary}12`, borderColor: `${colors.primary}30` }]}>
+                                  <Text style={[styles.variantAttrText, { color: colors.primary }]} numberOfLines={1}>{variantLabel}</Text>
+                                </View>
+                              </View>
+                            ) : null}
+                            <Text style={[styles.saleDetailSub, { color: colors.textTertiary }]}>{item.quantity} x {formatCurrency(item.unitPrice, cur)}</Text>
+                          </View>
+                          <Text style={[styles.saleDetailItemTotal, { color: colors.text }]}>{formatCurrency(item.totalTTC, cur)}</Text>
                         </View>
-                        <Text style={[styles.saleDetailItemTotal, { color: colors.text }]}>{formatCurrency(item.totalTTC, cur)}</Text>
-                      </View>
-                    ))}
+                      );
+                    })}
                   </View>
                   <View style={[styles.saleDetailTotals, { borderTopColor: colors.border }]}>
                     <View style={styles.saleDetailTotalRow}>
@@ -909,7 +1135,6 @@ export default function DashboardScreen() {
 
   const renderOverviewTab = () => (
     <>
-      {renderPeriodSelector()}
       {/* Today banner + Objectif CA side by side */}
       <View style={[styles.todayAndTargetRow, isMobile && styles.todayAndTargetRowMobile && styles.kpiRowCompact]}>
         {renderTodayBanner()}
@@ -966,44 +1191,58 @@ export default function DashboardScreen() {
 
 
 
-      {/* Graphiques CA par semaine + Donut categories */}
+      {selectedCategory && (
+        <TouchableOpacity
+          style={[styles.categoryFilterBanner, { backgroundColor: colors.primary + '10', borderColor: colors.primary + '30' }]}
+          onPress={() => { setSelectedCategory(null); setDonutCollapseFlag(prev => !prev); }}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.categoryFilterText, { color: colors.primary }]}>
+            {t('dashboard.filterByCategory', { category: selectedCategory })}
+          </Text>
+          <Text style={[styles.categoryFilterClear, { color: colors.primary }]}>{t('dashboard.clearFilter')}</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Graphique CA adaptatif + Donut categories */}
       <View style={[styles.chartsRow, isMobile && styles.chartsRowMobile]}>
-        {/* Bar chart CA hebdo */}
         <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
           <View style={styles.cardHeaderRow}>
             <View>
-              <Text style={[styles.cardTitle, { color: colors.text }]}>{t('dashboard.weeklyRevenue')}</Text>
-              <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>{t('dashboard.last8Weeks')}</Text>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>{periodChartTitle}</Text>
+              <Text style={[styles.cardSubtitle, { color: colors.textTertiary }]}>{periodChartSubtitle}</Text>
             </View>
           </View>
-          {!hasWeeklyData ? (
+          {!hasPeriodChartData ? (
             <View style={styles.emptyChart}>
               <BarChart3 size={28} color={colors.textTertiary} />
               <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>{t('dashboard.dataAfterSales')}</Text>
             </View>
           ) : (
-            <View style={styles.barChartArea}>
-              <View style={styles.barChartBars}>
-                {weeklyData.map((w, idx) => {
-                  const h = weeklyMax > 0 ? Math.max((w.revenue / weeklyMax) * 140, w.revenue > 0 ? 8 : 0) : 0;
-                  return (
-                    <View key={idx} style={styles.barCol}>
-                      <View style={styles.barValueWrap}>
-                        {w.revenue > 0 && <Text style={[styles.barValueText, { color: colors.primary }]}>{formatCurrencyInteger(w.revenue, cur)}</Text>}
+            <ScrollView horizontal={periodChartData.length > 8} showsHorizontalScrollIndicator={false}>
+              <View style={[styles.barChartArea, periodChartData.length > 8 && { minWidth: periodChartData.length * 52 }]}>
+                <View style={styles.barChartBars}>
+                  {periodChartData.map((w: { label: string; revenue: number; isCurrent: boolean }, idx: number) => {
+                    const h = periodChartMax > 0 ? Math.max((w.revenue / periodChartMax) * 140, w.revenue > 0 ? 8 : 0) : 0;
+                    return (
+                      <View key={idx} style={styles.barCol}>
+                        <View style={styles.barValueWrap}>
+                          {w.revenue > 0 && <Text style={[styles.barValueText, { color: colors.primary }]}>{formatCurrencyInteger(w.revenue, cur)}</Text>}
+                        </View>
+                        {w.revenue > 0 ? (
+                          <View style={[styles.bar, { height: h, backgroundColor: colors.primary, opacity: w.isCurrent ? 1 : 0.55, borderRadius: RADIUS.XS }]} />
+                        ) : (
+                          <View style={[styles.barDashed, { borderColor: colors.borderLight }]} />
+                        )}
+                        <Text style={[styles.barXLabel, { color: w.isCurrent ? colors.primary : colors.textTertiary, fontWeight: w.isCurrent ? '700' : '500' as const }]}>
+                          {w.label}
+                        </Text>
                       </View>
-                      {w.revenue > 0 ? (
-                        <View style={[styles.bar, { height: h, backgroundColor: colors.primary, opacity: w.isCurrent ? 1 : 0.55, borderRadius: RADIUS.XS }]} />
-                      ) : (
-                        <View style={[styles.barDashed, { borderColor: colors.borderLight }]} />
-                      )}
-                      <Text style={[styles.barXLabel, { color: w.isCurrent ? colors.primary : colors.textTertiary, fontWeight: w.isCurrent ? '700' : '500' }]}>
-                        {w.isCurrent ? t('dashboard.currentWeek') : w.label}
-                      </Text>
-                    </View>
-                  );
-                })}
+                    );
+                  })}
+                </View>
               </View>
-            </View>
+            </ScrollView>
           )}
         </View>
 
@@ -1011,24 +1250,80 @@ export default function DashboardScreen() {
         {categoryBreakdown.length > 0 ? (
           <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>{t('dashboard.salesByCategory')}</Text>
-            <View style={styles.donutContainer}>
-              <DonutChart
-                segments={categoryBreakdown}
-                size={isMobile ? 110 : 130}
-                strokeWidth={isMobile ? 16 : 20}
-                showLegend={true}
-                centerValue={formatCurrencyInteger(categoryBreakdown.reduce((s, seg) => s + seg.value, 0), cur)}
-                centerLabel={cur}
-                
-              />
-            </View>
+            <DonutChart
+              key={`donut-${period}`}
+              segments={categoryBreakdown}
+              size={isMobile ? 160 : 180}
+              strokeWidth={isMobile ? 24 : 30}
+              showLegend={true}
+              legendPosition="right"
+              centerValue={formatCurrencyInteger(categoryBreakdown.reduce((s, seg) => s + seg.value, 0), cur)}
+              centerLabel={cur}
+              currency={cur}
+              selectedSegmentLabel={selectedCategory}
+              collapseAll={donutCollapseFlag}
+              onSegmentPress={(segment) => {
+                setSelectedCategory(prev => prev === segment.label ? null : segment.label);
+              }}
+              renderExpandedContent={(segment) => {
+                const products: ProductSaleDetail[] = salesDetailsByCategory.get(segment.label) || [];
+                if (products.length === 0) {
+                  return (
+                    <Text style={[styles.emptyText, { color: colors.textTertiary }]}>
+                      {t('dashboard.noCategoryProducts')}
+                    </Text>
+                  );
+                }
+                return (
+                  <View style={styles.categoryDetailList}>
+                    {products.map((product, pIdx) => (
+                      <View key={product.productId || pIdx}>
+                        <View style={styles.categoryDetailRow}>
+                          <View style={styles.categoryDetailLeft}>
+                            <Text style={[styles.categoryDetailName, { color: colors.text }]} numberOfLines={1}>
+                              {product.productName}
+                            </Text>
+                            <Text style={[styles.categoryDetailQty, { color: colors.textTertiary }]}>
+                              {t('dashboard.units', { count: product.quantity })}
+                            </Text>
+                          </View>
+                          <Text style={[styles.categoryDetailAmount, { color: segment.color, fontWeight: 'bold' as const }]}>
+                            {formatCurrency(product.totalTTC, cur)}
+                          </Text>
+                        </View>
+                        {product.variantSales.length > 0 && (
+                          <View style={styles.variantSalesList}>
+                            {product.variantSales.sort((a, b) => b.totalTTC - a.totalTTC).map((vs) => (
+                              <View key={vs.variantId} style={styles.variantSaleRow}>
+                                <View style={[styles.variantSaleDot, { backgroundColor: segment.color + '40' }]} />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={[styles.variantSaleLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                                    {vs.attributeLabel || 'Variante'}
+                                  </Text>
+                                  <Text style={[styles.variantSaleQty, { color: colors.textTertiary }]}>
+                                    {t('dashboard.units', { count: vs.quantity })}
+                                  </Text>
+                                </View>
+                                <Text style={[styles.variantSaleAmount, { color: segment.color }]}>
+                                  {formatCurrency(vs.totalTTC, cur)}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                );
+              }}
+            />
           </View>
         ) : (
           <View style={[styles.card, styles.chartCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }, isMobile && { flex: 0 }]}>
             <Text style={[styles.cardTitle, { color: colors.text }]}>{t('dashboard.salesByCategory')}</Text>
             <View style={styles.emptyChart}>
               <PieChart size={28} color={colors.textTertiary} />
-              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>Les donnees apparaitront avec les premieres ventes.</Text>
+              <Text style={[styles.emptyChartText, { color: colors.textTertiary }]}>{t('dashboard.dataAfterSales')}</Text>
             </View>
           </View>
         )}
@@ -1053,8 +1348,6 @@ export default function DashboardScreen() {
 
   const renderAnalysisTab = () => (
     <>
-      {renderPeriodSelector()}
-
       {/* Exports PDF */}
       <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
         <Text style={[styles.cardTitle, { color: colors.text }]}>{t('reports.exportPDF')}</Text>
@@ -1509,17 +1802,29 @@ export default function DashboardScreen() {
           onTabChange={(tab) => { setActiveTab(tab); scrollRef.current?.scrollTo({ y: 0, animated: true }); }}
         />
       )}
+      {!simplifiedDashboard && (
+        <View style={[styles.stickyPeriodRow, { backgroundColor: colors.background, borderBottomColor: colors.borderLight }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
+            {PERIOD_OPTION_KEYS.map((opt) => (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.periodPill, { backgroundColor: period === opt.key ? colors.primary : colors.card, borderColor: period === opt.key ? colors.primary : colors.cardBorder }]}
+                onPress={() => setPeriod(opt.key)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.periodText, { color: period === opt.key ? SEMANTIC_COLORS.WHITE : colors.textSecondary }]}>{t(opt.labelKey)}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
+      )}
       <ScrollView ref={scrollRef} style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* En-tete de bienvenue avec KPI cards */}
         <View style={styles.welcomeRow}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.greetingText, { color: colors.text }]}>{greeting}</Text>
             <Text style={[styles.dateText, { color: colors.textSecondary }]}>{todayStr}</Text>
           </View>
         </View>
-
-
-
 
         {simplifiedDashboard ? renderSimplifiedDashboard() : (
           <>
@@ -1699,4 +2004,31 @@ const styles = StyleSheet.create({
   exportBtnRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.MD, marginTop: SPACING.LG },
   exportBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACING.SM, paddingHorizontal: SPACING.XXL, paddingVertical: SPACING.LG, borderRadius: RADIUS.MD },
   exportBtnText: { color: SEMANTIC_COLORS.WHITE, fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+
+  emptyText: {fontSize: TYPOGRAPHY.SIZE.SMALL, textAlign: 'center', paddingVertical: SPACING.MD,},
+  categoryDetailList: {gap: SPACING.SM, marginTop: SPACING.XS,},
+  categoryDetailHeader: {fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD, textTransform: 'uppercase' as const, letterSpacing: TYPOGRAPHY.LETTER_SPACING.WIDE, marginBottom: SPACING.XXS,},
+  categoryDetailRow: {flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, paddingVertical: SPACING.XXS,},
+  categoryDetailLeft: {flex: 2,},
+  categoryDetailName: {fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM,},
+  categoryDetailQty: {fontSize: TYPOGRAPHY.SIZE.CAPTION, marginTop: 1,},
+  categoryDetailAmount: {fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD,},
+
+  categoryFilterBanner: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, paddingHorizontal: SPACING.XXXL, paddingVertical: SPACING.LG, borderRadius: RADIUS.LG, borderWidth: 1 },
+  categoryFilterText: { fontSize: TYPOGRAPHY.SIZE.BODY_SMALL, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
+  categoryFilterClear: { fontSize: TYPOGRAPHY.SIZE.SMALL, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM, textDecorationLine: 'underline' as const },
+
+  stickyPeriodRow: { paddingHorizontal: SPACING.XXXL, paddingVertical: SPACING.MD, borderBottomWidth: 1 },
+
+  variantAttrList: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 4, paddingLeft: 8, paddingBottom: 6, marginTop: -2 },
+  variantAttrChip: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1 },
+  variantAttrText: { fontSize: 10, fontWeight: '500' as const },
+  saleItemAttrText: { fontSize: 11, marginTop: 1 },
+
+  variantSalesList: { marginLeft: 12, marginTop: 4, gap: 3 },
+  variantSaleRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, paddingVertical: 2 },
+  variantSaleDot: { width: 6, height: 6, borderRadius: 3 },
+  variantSaleLabel: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.MEDIUM },
+  variantSaleQty: { fontSize: 10 },
+  variantSaleAmount: { fontSize: TYPOGRAPHY.SIZE.CAPTION, fontWeight: TYPOGRAPHY.WEIGHT.SEMIBOLD },
 });

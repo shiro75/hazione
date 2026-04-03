@@ -3,13 +3,21 @@
  * Tous les formateurs utilisent la locale française par défaut.
  */
 
+import { COUNTRY_CODES } from '@/constants/countryCodes';
+
+function getFlagForDialCode(dialCode: string): string {
+  const cc = COUNTRY_CODES.find(c => c.dialCode === dialCode);
+  return cc?.flag ?? '';
+}
+
 export function formatPhone(phone: string): string {
   if (!phone) return '—';
   const cleaned = phone.replace(/\s/g, '');
-  const match = cleaned.match(/^(\+\d{1,3})(\d+)$/);
+  const match = cleaned.match(/^(\+\d{1,4})(\d+)$/);
   if (!match) return phone;
   const prefix = match[1];
   const digits = match[2];
+  const flag = getFlagForDialCode(prefix);
   const groups: string[] = [];
   let start = 0;
   if (digits.length % 2 === 1) {
@@ -19,7 +27,7 @@ export function formatPhone(phone: string): string {
   for (let i = start; i < digits.length; i += 2) {
     groups.push(digits.slice(i, i + 2));
   }
-  return `${prefix} ${groups.join(' ')}`;
+  return `${flag ? flag + ' ' : ''}${prefix} ${groups.join(' ')}`;
 }
 
 export function formatCurrency(amount: number, currency: string = 'EUR', appLocale?: string): string {

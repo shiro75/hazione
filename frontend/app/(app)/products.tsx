@@ -24,7 +24,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
-  useWindowDimensions, Image, Modal, Pressable, Alert, Platform,
+  useWindowDimensions, Image, Modal, Pressable, Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
@@ -33,11 +33,12 @@ import {
   Briefcase, Box, ArrowUpDown, Trash2, AlertTriangle,
   Tag, Layers, ChevronLeft, ChevronRight, Tags, Upload,
   LayoutGrid, List, Image as ImageIcon, Download,
-  ChevronUp, ChevronDown,
+  ChefHat, EyeOff, Eye, Copy,
 } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
 import { useI18n } from '@/contexts/I18nContext';
+import { useConfirm } from '@/contexts/ConfirmContext';
 import { formatCurrency } from '@/utils/format';
 import { exportToCSV, type ExportColumn } from '@/utils/csvExport';
 import PageHeader from '@/components/PageHeader';
@@ -46,6 +47,7 @@ import ConfirmModal from '@/components/ConfirmModal';
 import DropdownPicker from '@/components/DropdownPicker';
 import ProductImportModal from '@/components/ProductImportModal';
 import type { PreviewProduct, ExistingProductRef } from '@/components/ProductImportModal';
+import RecipeEditor from '@/components/RecipeEditor';
 import type { VATRate, ProductType, ProductVariant, Product } from '@/types';
 import { getProductTypeOptions, getProductTypeConfig, isStockableType } from '@/constants/productTypes';
 
@@ -58,7 +60,7 @@ const modalOverlay = {
 } as const;
 
 // Type representant l'etape courante dans le formulaire multi-etapes
-type FormStep = 1 | 2 | 3;
+type FormStep = 1 | 2 | 3 | 4;
 
 /**
  * Structure d'un brouillon de variante avant enregistrement.
@@ -112,6 +114,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
   const { t } = useI18n();
+  const { confirm } = useConfirm();
 
   const {
     activeProducts, products, createProduct, updateProduct, archiveProduct, unarchiveProduct, deleteProduct,
@@ -125,7 +128,8 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
     addAttributeValue, removeAttributeValue, updateAttributeValuesOrder,
     company,
     showToast,
-    reorderAttributeValue,
+    getRecipeForProduct,
+    saveRecipe,
   } = useData();
 
   const cur = company.currency || 'EUR';
@@ -184,6 +188,21 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
     stock: string;
     minStock: string;
   }>({ attributes: [{ key: '', value: '' }], sku: '', purchasePrice: '', salePrice: '', stock: '0', minStock: '0' });
+
+  // Recipe editor state
+  const [recipeEditorVisible, setRecipeEditorVisible] = useState(false);
+  const [recipeEditorProductId, setRecipeEditorProductId] = useState<string>('');
+  const [recipeEditorVariantId, setRecipeEditorVariantId] = useState<string | undefined>(undefined);
+  const [recipeEditorProductName, setRecipeEditorProductName] = useState<string>('');
+  const [recipeEditorVariantLabel, setRecipeEditorVariantLabel] = useState<string | undefined>(undefined);
+
+  const openRecipeEditor = useCallback((productId: string, productName: string, variantId?: string, variantLabel?: string) => {
+    setRecipeEditorProductId(productId);
+    setRecipeEditorVariantId(variantId);
+    setRecipeEditorProductName(productName);
+    setRecipeEditorVariantLabel(variantLabel);
+    setRecipeEditorVisible(true);
+  }, []);
 
   // Produit actuellement selectionne pour la fiche de detail
   const selectedProduct = useMemo(() => {
@@ -412,8 +431,14 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
   const handleNextStep = useCallback(() => {
     if (formStep === 1) {
       if (!form.name.trim()) { setFormError('Le nom est requis'); return; }
-      const salePrice = parseFloat(form.salePrice);
-      if (isNaN(salePrice) || salePrice <= 0) { setFormError('Le prix de vente doit être un nombre positif'); return; }
+      const isRawMat = form.type === 'matiere_premiere';
+      if (isRawMat) {
+        const purchasePrice = parseFloat(form.purchasePrice);
+        if (isNaN(purchasePrice) || purchasePrice <= 0) { setFormError('Le prix d\'achat est requis pour les matieres premieres'); return; }
+      } else {
+        const salePrice = parseFloat(form.salePrice);
+        if (isNaN(salePrice) || salePrice <= 0) { setFormError('Le prix de vente doit etre un nombre positif'); return; }
+      }
       setFormError('');
       setFormStep(2);
     } else if (formStep === 2) {
@@ -437,13 +462,16 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
       setBulkPurchasePrice(form.purchasePrice);
       setBulkSalePrice(form.salePrice);
       setFormStep(3);
+    } else if (formStep === 3 && (form.type === 'produit_transforme' || form.type === 'produit_fini')) {
+      setFormError('');
+      setFormStep(4);
     }
   }, [formStep, form, editingId, generateCombinations, variantDrafts]);
 
-  // Retour a l'etape precedente dans le formulaire multi-etapes
   const handlePrevStep = useCallback(() => {
     if (formStep === 2) setFormStep(1);
     else if (formStep === 3) setFormStep(2);
+    else if (formStep === 4) setFormStep(3);
   }, [formStep]);
 
   /**
@@ -453,12 +481,14 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
    */
   const handleFinalSubmit = useCallback(() => {
     if (!form.name.trim()) { setFormError('Le nom est requis'); return; }
-    const salePriceTTC = parseFloat(form.salePrice);
-    if (isNaN(salePriceTTC) || salePriceTTC <= 0) { setFormError('Le prix de vente doit être positif'); return; }
+    const isRawMat = form.type === 'matiere_premiere';
+    const salePriceTTC = parseFloat(form.salePrice) || 0;
+    if (!isRawMat && (isNaN(salePriceTTC) || salePriceTTC <= 0)) { setFormError('Le prix de vente doit etre positif'); return; }
+    const purchasePriceVal = parseFloat(form.purchasePrice) || 0;
+    if (isRawMat && purchasePriceVal <= 0) { setFormError('Le prix d\'achat est requis pour les matieres premieres'); return; }
     const vatRate = parseFloat(form.vatRate) as VATRate;
-    // Conversion TTC -> HT arrondie a 2 decimales pour le stockage
-    const salePrice = Math.round(salePriceTTC / (1 + vatRate / 100) * 100) / 100;
-    const purchasePrice = parseFloat(form.purchasePrice) || 0;
+    const salePrice = salePriceTTC > 0 ? Math.round(salePriceTTC / (1 + vatRate / 100) * 100) / 100 : 0;
+    const purchasePrice = purchasePriceVal;
     const lowStockThreshold = parseInt(form.lowStockThreshold, 10) || 5;
 
     const allImageUrls = [...form.imageUrls.filter(u => u.trim()), ...(form.photoUrl.trim() ? [form.photoUrl.trim()] : [])].filter((v, i, a) => a.indexOf(v) === i);
@@ -513,15 +543,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
         }
       });
 
-      // Si aucune variante et aucun attribut selectionne, creation d'une variante par defaut
-      if (includedDrafts.length === 0 && selectedAttrIds.length === 0 && existingVariants.length === 0) {
-        createVariant({
-          productId: editingId,
-          attributes: {},
-          sku: generateVariantSKU(form.brand || '', form.name || '', 1),
-          purchasePrice, salePrice, stockQuantity: 0, minStock: lowStockThreshold, isActive: true,
-        });
-      }
+
     } else {
       const result = createProduct(data);
       if (!result.success) { setFormError(result.error || 'Erreur inconnue'); return; }
@@ -538,18 +560,11 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
           minStock: parseInt(d.minStock, 10) || 0,
         }));
         createVariantsBatch(productId, batchData);
-      } else if (selectedAttrIds.length === 0 && productId) {
-        createVariant({
-          productId,
-          attributes: {},
-          sku: generateVariantSKU(form.brand || '', form.name || '', 1),
-          purchasePrice, salePrice, stockQuantity: 0, minStock: lowStockThreshold, isActive: true,
-        });
       }
     }
 
     setFormVisible(false);
-  }, [form, variantDrafts, selectedAttrIds, editingId, createProduct, updateProduct, createVariantsBatch, createVariant, updateVariantFn, deleteVariant, getVariantsForProduct, products, generateVariantSKU]);
+  }, [form, variantDrafts, editingId, createProduct, updateProduct, createVariantsBatch, createVariant, updateVariantFn, deleteVariant, getVariantsForProduct]);
 
   /**
    * Sauvegarde rapide depuis l'etape 1 ou 2, sans passer par l'etape 3.
@@ -558,18 +573,20 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
    */
   const handleQuickSave = useCallback(() => {
     if (!form.name.trim()) { setFormError('Le nom est requis'); return; }
-    const salePriceTTC = parseFloat(form.salePrice);
-    if (isNaN(salePriceTTC) || salePriceTTC <= 0) { setFormError('Le prix de vente doit être positif'); return; }
+    const isRawMat = form.type === 'matiere_premiere';
+    const salePriceTTC = parseFloat(form.salePrice) || 0;
+    if (!isRawMat && (isNaN(salePriceTTC) || salePriceTTC <= 0)) { setFormError('Le prix de vente doit etre positif'); return; }
     const purchasePrice = parseFloat(form.purchasePrice) || 0;
+    if (isRawMat && purchasePrice <= 0) { setFormError('Le prix d\'achat est requis pour les matieres premieres'); return; }
     const lowStockThreshold = parseInt(form.lowStockThreshold, 10) || 5;
     const vatRate = parseFloat(form.vatRate) as VATRate;
-    const salePrice = Math.round(salePriceTTC / (1 + vatRate / 100) * 100) / 100;
+    const salePrice = salePriceTTC > 0 ? Math.round(salePriceTTC / (1 + vatRate / 100) * 100) / 100 : 0;
     const data = {
       name: form.name.trim(), description: form.description.trim(), sku: form.sku.trim(),
       barcode: form.barcode.trim() || undefined,
       categoryName: form.category || undefined, brand: form.brand || undefined,
       purchasePrice, salePrice, vatRate, lowStockThreshold,
-      unit: form.unit || 'pièce', type: form.type, isActive: form.isActive,
+      unit: form.unit || 'piece', type: form.type, isActive: form.isActive,
       photoUrl: form.photoUrl.trim() || undefined,
     };
     if (editingId) {
@@ -581,17 +598,11 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
       const newProdId = result.productId;
       if (newProdId) {
         setEditingId(newProdId);
-        createVariant({
-          productId: newProdId,
-          attributes: {},
-          sku: generateVariantSKU(form.brand || '', form.name || '', 1),
-          purchasePrice, salePrice, stockQuantity: 0, minStock: lowStockThreshold, isActive: true,
-        });
       }
     }
     setFormVisible(false);
-    showToast('Produit enregistré');
-  }, [editingId, form, updateProduct, createProduct, products, createVariant, generateVariantSKU, showToast]);
+    showToast('Produit enregistre');
+  }, [editingId, form, updateProduct, createProduct, showToast]);
 
   /**
    * Applique les prix saisis dans les champs "Appliquer a toutes" a l'ensemble
@@ -612,6 +623,67 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
   const handleDelete = useCallback(() => {
     if (deleteConfirm) { deleteProduct(deleteConfirm); setDeleteConfirm(null); }
   }, [deleteConfirm, deleteProduct]);
+
+  const handleDuplicateProduct = useCallback(() => {
+    if (!editingId) return;
+    const product = products.find(p => p.id === editingId);
+    if (!product) return;
+    const data = {
+      name: product.name + ' - Copy',
+      description: product.description,
+      sku: generateUniqueSKU(),
+      barcode: '',
+      categoryName: product.categoryName,
+      brand: product.brand,
+      purchasePrice: product.purchasePrice,
+      salePrice: product.salePrice,
+      vatRate: product.vatRate,
+      stockQuantity: 0,
+      lowStockThreshold: product.lowStockThreshold,
+      unit: product.unit,
+      type: product.type,
+      isActive: true,
+      photoUrl: product.photoUrl,
+      imageUrls: product.imageUrls,
+    };
+    const result = createProduct(data);
+    if (result.success && result.productId) {
+      const newProductId = result.productId;
+      const sourceVariants = getVariantsForProduct(editingId);
+      if (sourceVariants.length > 0) {
+        const batchData = sourceVariants.map((v, idx) => ({
+          attributes: { ...v.attributes },
+          sku: generateVariantSKU(product.brand || '', product.name + ' - Copy', idx + 1),
+          purchasePrice: v.purchasePrice,
+          salePrice: v.salePrice,
+          stockQuantity: 0,
+          minStock: v.minStock ?? 0,
+        }));
+        createVariantsBatch(newProductId, batchData);
+        const newVariants = getVariantsForProduct(newProductId);
+        sourceVariants.forEach((srcVariant) => {
+          const srcRecipe = getRecipeForProduct(editingId, srcVariant.id);
+          if (srcRecipe && srcRecipe.items.length > 0) {
+            const matchingNew = newVariants.find(nv =>
+              JSON.stringify(nv.attributes) === JSON.stringify(srcVariant.attributes)
+            );
+            if (matchingNew) {
+              saveRecipe(newProductId, srcRecipe.items.map(item => ({ ...item })), matchingNew.id);
+            }
+          }
+        });
+      }
+      const productRecipe = getRecipeForProduct(editingId);
+      if (productRecipe && productRecipe.items.length > 0) {
+        saveRecipe(newProductId, productRecipe.items.map(item => ({ ...item })));
+      }
+      setFormVisible(false);
+      showToast('Produit dupliqué avec variantes et recettes');
+    } else if (result.success) {
+      setFormVisible(false);
+      showToast('Produit dupliqué');
+    }
+  }, [editingId, products, createProduct, showToast, getVariantsForProduct, createVariantsBatch, generateVariantSKU, getRecipeForProduct, saveRecipe]);
 
   // Mise a jour d'un champ du formulaire principal avec reinitialisation de l'erreur
   const updateField = useCallback(<K extends keyof typeof EMPTY_FORM>(key: K, value: typeof EMPTY_FORM[K]) => {
@@ -702,11 +774,11 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
   }, [selectedProductId, selectedProduct, variantForm, editingVariantId, createVariant, updateVariantFn]);
 
   const handleDeleteVariant = useCallback((variantId: string) => {
-    Alert.alert('Supprimer', 'Supprimer cette variante ?', [
+    confirm('Supprimer', 'Supprimer cette variante ?', [
       { text: 'Annuler', style: 'cancel' },
       { text: 'Supprimer', style: 'destructive', onPress: () => deleteVariant(variantId) },
     ]);
-  }, [deleteVariant]);
+  }, [deleteVariant, confirm]);
 
   // Affiche une ligne label / valeur dans la fiche produit, masquee si la valeur est vide
   const renderInfoRow = useCallback((label: string, value: string | undefined, valueColor?: string) => {
@@ -719,10 +791,20 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
     );
   }, [colors]);
 
-  // Indicateur visuel des etapes du formulaire (1 - 2 - 3) avec etat actif / complete
+  const isTransformedType = form.type === 'produit_transforme' || form.type === 'produit_fini';
+  const isRawMaterial = form.type === 'matiere_premiere';
+
+  const getUserVariants = useCallback((productId: string) => {
+    const pvs = getVariantsForProduct(productId);
+    const userVars = pvs.filter(v => Object.keys(v.attributes).length > 0);
+    return userVars.length > 0 ? userVars : [];
+  }, [getVariantsForProduct]);
+  const stepLabels: Record<number, string> = { 1: 'Infos', 2: 'Attributs', 3: 'Variantes', 4: t('recipe.title') };
+  const stepsToShow = isTransformedType ? [1, 2, 3, 4] : [1, 2, 3];
+
   const renderStepIndicator = () => (
     <View style={stepStyles.container}>
-      {[1, 2, 3].map((step) => (
+      {stepsToShow.map((step) => (
         <View key={step} style={stepStyles.stepRow}>
           <View style={[
             stepStyles.stepCircle,
@@ -738,9 +820,9 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
             )}
           </View>
           <Text style={[stepStyles.stepLabel, { color: formStep >= step ? colors.text : colors.textTertiary }]}>
-            {step === 1 ? 'Infos' : step === 2 ? 'Attributs' : 'Variantes'}
+            {stepLabels[step]}
           </Text>
-          {step < 3 && <View style={[stepStyles.stepLine, { backgroundColor: formStep > step ? colors.primary : colors.border }]} />}
+          {step < stepsToShow[stepsToShow.length - 1] && <View style={[stepStyles.stepLine, { backgroundColor: formStep > step ? colors.primary : colors.border }]} />}
         </View>
       ))}
     </View>
@@ -844,12 +926,11 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
       <View style={styles.formRow}>
         <View style={styles.formCol}>
           <FormField label={t('stock.purchasePrice')} value={form.purchasePrice}
-            onChangeText={(v) => updateField('purchasePrice', v)} placeholder={t('stock.purchasePricePlaceholder')} keyboardType="decimal-pad" />
+            onChangeText={(v) => updateField('purchasePrice', v)} placeholder={t('stock.purchasePricePlaceholder')} keyboardType="decimal-pad" required={isRawMaterial} />
         </View>
         <View style={styles.formCol}>
-          {/* Le prix saisi ici est en TTC, converti en HT avant enregistrement */}
           <FormField label={t('stock.salePrice')} value={form.salePrice}
-            onChangeText={(v) => updateField('salePrice', v)} placeholder={t('stock.salePricePlaceholder')} keyboardType="decimal-pad" required />
+            onChangeText={(v) => updateField('salePrice', v)} placeholder={t('stock.salePricePlaceholder')} keyboardType="decimal-pad" required={!isRawMaterial} />
         </View>
       </View>
 
@@ -1378,10 +1459,155 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
     });
   }, [productAttributes]);
 
-  /**
-   * Fiche produit en lecture seule.
-   * Donne acces a l'edition du produit et a la gestion individuelle des variantes.
-   */
+  const renderStep4 = () => {
+    const productId = editingId;
+    const productVariantsForRecipe = productId ? getVariantsForProduct(productId) : [];
+    const hasMultipleVariants = productVariantsForRecipe.length > 1 ||
+      (productVariantsForRecipe.length === 1 && Object.keys(productVariantsForRecipe[0].attributes).length > 0);
+
+    return (
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 16, paddingBottom: 20 }}>
+        <View style={[{ backgroundColor: `${colors.primary}08`, borderColor: `${colors.primary}20`, borderWidth: 1, borderRadius: 10, padding: 12, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 }]}>
+          <ChefHat size={16} color={colors.primary} />
+          <Text style={{ flex: 1, fontSize: 13, color: colors.textSecondary }}>
+            {t('recipe.step4Hint')}
+          </Text>
+        </View>
+
+        {!productId ? (
+          <View style={{ alignItems: 'center' as const, paddingVertical: 24 }}>
+            <Text style={{ fontSize: 13, color: colors.textTertiary }}>
+              {t('recipe.noRecipeHint')}
+            </Text>
+          </View>
+        ) : hasMultipleVariants ? (
+          <View style={{ gap: 8 }}>
+            <Text style={[stepStyles.sectionTitle, { color: colors.text }]}>
+              {t('recipe.variantRecipe')}
+            </Text>
+            <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>
+              {t('recipe.stockDeduction')}
+            </Text>
+            {getOrderedVariants(productVariantsForRecipe).map((v) => {
+              const hasAttrs = Object.keys(v.attributes).length > 0;
+              const attrLabel = hasAttrs
+                ? Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(' / ')
+                : t('recipe.defaultVariant');
+              const recipe = getRecipeForProduct(productId, v.id);
+              const hasRecipe = recipe && recipe.items.length > 0;
+              return (
+                <View key={v.id} style={[{
+                  backgroundColor: colors.card,
+                  borderColor: colors.cardBorder,
+                  borderWidth: 1,
+                  borderRadius: 10,
+                  padding: 12,
+                  gap: 8,
+                }]}>
+                  <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const }}>
+                    <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.text, flex: 1 }} numberOfLines={1}>
+                      {attrLabel}
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.iconBtn, {
+                        backgroundColor: hasRecipe ? '#ECFDF5' : colors.primaryLight,
+                        flexDirection: 'row' as const,
+                        gap: 4,
+                        paddingHorizontal: 8,
+                        width: 'auto' as unknown as number,
+                      }]}
+                      onPress={() => openRecipeEditor(productId, form.name, v.id, attrLabel)}
+                    >
+                      <ChefHat size={12} color={hasRecipe ? '#059669' : colors.primary} />
+                      <Text style={{ fontSize: 11, fontWeight: '600' as const, color: hasRecipe ? '#059669' : colors.primary }}>
+                        {hasRecipe ? t('recipe.editRecipe') : t('recipe.addRecipe')}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  {hasRecipe && (
+                    <View style={{ gap: 4 }}>
+                      {recipe.items.map(item => (
+                        <View key={item.id} style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 }}>
+                          <Package size={10} color={colors.textTertiary} />
+                          <Text style={{ flex: 1, fontSize: 11, color: colors.textSecondary }} numberOfLines={1}>
+                            {item.ingredientProductName}
+                            {item.ingredientVariantLabel ? ` (${item.ingredientVariantLabel})` : ''}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: colors.primary, fontWeight: '600' as const }}>
+                            {item.quantity} {item.unit}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <View style={{ gap: 8 }}>
+            <Text style={[stepStyles.sectionTitle, { color: colors.text }]}>
+              {t('recipe.productRecipe')}
+            </Text>
+            <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>
+              {t('recipe.stockDeduction')}
+            </Text>
+            {(() => {
+              const recipe = getRecipeForProduct(productId);
+              const hasRecipe = recipe && recipe.items.length > 0;
+              return (
+                <View style={[{
+                  backgroundColor: colors.card,
+                  borderColor: colors.cardBorder,
+                  borderWidth: 1,
+                  borderRadius: 10,
+                  padding: 12,
+                  gap: 8,
+                }]}>
+                  {hasRecipe && (
+                    <View style={{ gap: 4 }}>
+                      {recipe.items.map(item => (
+                        <View key={item.id} style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 }}>
+                          <Package size={10} color={colors.textTertiary} />
+                          <Text style={{ flex: 1, fontSize: 11, color: colors.textSecondary }} numberOfLines={1}>
+                            {item.ingredientProductName}
+                            {item.ingredientVariantLabel ? ` (${item.ingredientVariantLabel})` : ''}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: colors.primary, fontWeight: '600' as const }}>
+                            {item.quantity} {item.unit}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    style={[{
+                      flexDirection: 'row' as const,
+                      alignItems: 'center' as const,
+                      justifyContent: 'center' as const,
+                      gap: 6,
+                      paddingVertical: 10,
+                      borderRadius: 8,
+                      borderWidth: 1.5,
+                      borderStyle: 'dashed' as const,
+                      borderColor: hasRecipe ? '#059669' : colors.primary,
+                    }]}
+                    onPress={() => openRecipeEditor(productId, form.name)}
+                  >
+                    <ChefHat size={14} color={hasRecipe ? '#059669' : colors.primary} />
+                    <Text style={{ fontSize: 13, fontWeight: '600' as const, color: hasRecipe ? '#059669' : colors.primary }}>
+                      {hasRecipe ? t('recipe.editRecipe') : t('recipe.addRecipe')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })()}
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
   const renderProductDetail = () => {
     if (!selectedProduct) return null;
     const totalStock = getProductTotalStock(selectedProduct.id);
@@ -1430,7 +1656,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
               ) : (
                 <TouchableOpacity
                   onPress={() => {
-                    Alert.alert('Archiver', `Archiver « ${selectedProduct.name} » ?`, [
+                    confirm('Archiver', `Archiver « ${selectedProduct.name} » ?`, [
                       { text: 'Annuler', style: 'cancel' },
                       { text: 'Archiver', style: 'destructive', onPress: () => { archiveProduct(selectedProduct.id); setSelectedProductId(null); } },
                     ]);
@@ -1443,7 +1669,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
               )}
               <TouchableOpacity
                 onPress={() => {
-                  Alert.alert('Supprimer', `Supprimer définitivement « ${selectedProduct.name} » et toutes ses variantes ?`, [
+                  confirm('Supprimer', `Supprimer définitivement « ${selectedProduct.name} » et toutes ses variantes ?`, [
                     { text: 'Annuler', style: 'cancel' },
                     { text: 'Supprimer', style: 'destructive', onPress: () => { deleteProduct(selectedProduct.id); setSelectedProductId(null); } },
                   ]);
@@ -1508,12 +1734,12 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                   <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 }}>
                     <Layers size={16} color={colors.primary} />
                     <Text style={[detailStyles.variantsTitle, { color: colors.text }]}>
-                      {t('stock.variants', { count: selectedProductVariants.length })}
+                      {t('stock.variants', { count: getUserVariants(selectedProduct.id).length })}
                     </Text>
-                    {selectedProductVariants.length > 0 && (
+                    {getUserVariants(selectedProduct.id).length > 0 && (
                       <View style={[detailStyles.variantCountBadge, { backgroundColor: `${colors.primary}15` }]}>
                         <Text style={[detailStyles.variantCountText, { color: colors.primary }]}>
-                          {selectedProductVariants.length}
+                          {getUserVariants(selectedProduct.id).length}
                         </Text>
                       </View>
                     )}
@@ -1524,7 +1750,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                   </TouchableOpacity>
                 </View>
 
-                {selectedProductVariants.length === 0 ? (
+                {getUserVariants(selectedProduct.id).length === 0 ? (
                   <View style={detailStyles.emptyVariants}>
                     <Layers size={28} color={colors.textTertiary} />
                     <Text style={[detailStyles.emptyVariantsText, { color: colors.textTertiary }]}>{t('stock.noVariants')}</Text>
@@ -1544,7 +1770,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                       </View>
                     )}
                     {/* Utilisation de getOrderedVariants pour afficher les variantes dans l'ordre défini */}
-                    {getOrderedVariants(selectedProductVariants).map((v) => {
+                    {getOrderedVariants(getUserVariants(selectedProduct.id)).map((v) => {
                       const hasAttrs = Object.keys(v.attributes).length > 0;
                       const attrLabel = hasAttrs
                         ? Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(' — ')
@@ -1578,6 +1804,14 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                             </>
                           )}
                           <View style={{ flex: isMobile ? undefined : 0.6, flexDirection: 'row' as const, justifyContent: 'flex-end' as const, gap: 4 }}>
+                            {(selectedProduct.type === 'produit_transforme' || selectedProduct.type === 'produit_fini') && hasAttrs && (
+                              <TouchableOpacity
+                                onPress={() => openRecipeEditor(selectedProduct.id, selectedProduct.name, v.id, attrLabel)}
+                                style={[styles.iconBtn, { backgroundColor: getRecipeForProduct(selectedProduct.id, v.id) ? '#ECFDF5' : `${colors.primary}10` }]}
+                              >
+                                <ChefHat size={11} color={getRecipeForProduct(selectedProduct.id, v.id) ? '#059669' : colors.primary} />
+                              </TouchableOpacity>
+                            )}
                             <TouchableOpacity onPress={() => openVariantEdit(v)} style={[styles.iconBtn, { backgroundColor: colors.primaryLight }]}>
                               <Pencil size={11} color={colors.primary} />
                             </TouchableOpacity>
@@ -1591,6 +1825,55 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                   </View>
                 )}
               </View>
+
+              {(selectedProduct.type === 'produit_transforme' || selectedProduct.type === 'produit_fini') && getUserVariants(selectedProduct.id).length === 0 && (
+                <View style={[detailStyles.variantsSection, { borderColor: colors.cardBorder, marginTop: 12 }]}>
+                  <View style={detailStyles.variantsHeader}>
+                    <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 }}>
+                      <ChefHat size={16} color={colors.primary} />
+                      <Text style={[detailStyles.variantsTitle, { color: colors.text }]}>
+                        {t('recipe.title')}
+                      </Text>
+                    </View>
+                  </View>
+                  {(() => {
+                    const productRecipe = getRecipeForProduct(selectedProduct.id);
+                    return (
+                      <View style={{ paddingHorizontal: 12, paddingBottom: 12, gap: 8 }}>
+                        {productRecipe && productRecipe.items.length > 0 ? (
+                          <View style={{ gap: 6 }}>
+                            {productRecipe.items.map(item => (
+                              <View key={item.id} style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, paddingVertical: 4 }}>
+                                <Package size={12} color={colors.textTertiary} />
+                                <Text style={{ flex: 1, fontSize: 12, color: colors.text }} numberOfLines={1}>
+                                  {item.ingredientProductName}
+                                  {item.ingredientVariantLabel ? ` (${item.ingredientVariantLabel})` : ''}
+                                </Text>
+                                <Text style={{ fontSize: 12, color: colors.primary, fontWeight: '600' as const }}>
+                                  {item.quantity} {item.unit}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : (
+                          <Text style={{ fontSize: 12, color: colors.textTertiary }}>
+                            {t('recipe.noRecipe')}
+                          </Text>
+                        )}
+                        <TouchableOpacity
+                          style={[styles.iconBtn, { backgroundColor: productRecipe ? '#ECFDF5' : colors.primaryLight, flexDirection: 'row' as const, gap: 6, paddingHorizontal: 10, width: 'auto' as unknown as number }]}
+                          onPress={() => openRecipeEditor(selectedProduct.id, selectedProduct.name)}
+                        >
+                          <ChefHat size={13} color={productRecipe ? '#059669' : colors.primary} />
+                          <Text style={{ fontSize: 12, fontWeight: '600' as const, color: productRecipe ? '#059669' : colors.primary }}>
+                            {productRecipe ? t('recipe.editRecipe') : t('recipe.addRecipe')}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()}
+                </View>
+              )}
             </ScrollView>
           </Pressable>
         </Pressable>
@@ -1719,7 +2002,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
   const renderFormModal = () => {
     if (!formVisible) return null;
     const isEditing = !!editingId;
-    const stepTitle = formStep === 1 ? t('stock.step1Title') : formStep === 2 ? t('stock.step2Title') : t('stock.step3Title');
+    const stepTitle = formStep === 1 ? t('stock.step1Title') : formStep === 2 ? t('stock.step2Title') : formStep === 3 ? t('stock.step3Title') : t('recipe.step4Title');
     return (
       <Modal visible={true} transparent animationType="fade" onRequestClose={() => setFormVisible(false)}>
         <Pressable style={modalOverlay} onPress={() => setFormVisible(false)}>
@@ -1730,25 +2013,56 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
               </Text>
               {editingId && (() => {
                 const editProduct = products.find(p => p.id === editingId);
-                if (editProduct?.isArchived || (editProduct && !editProduct.isActive)) {
-                  return (
+                if (!editProduct) return null;
+                const isAvailable = editProduct.isAvailableForSale !== false;
+                return (
+                  <>
                     <TouchableOpacity
-                      onPress={() => { unarchiveProduct(editingId); setFormVisible(false); }}
-                      style={[detailStyles.editBtn, { backgroundColor: colors.successLight }]}
+                      onPress={handleDuplicateProduct}
+                      style={[detailStyles.editBtn, { backgroundColor: '#E8F5E9' }]}
                       hitSlop={8}
                     >
-                      <Archive size={14} color={colors.success} />
+                      <Copy size={14} color="#2E7D32" />
                     </TouchableOpacity>
-                  );
-                }
-                return (
-                  <TouchableOpacity
-                    onPress={() => { archiveProduct(editingId); setFormVisible(false); }}
-                    style={[detailStyles.editBtn, { backgroundColor: colors.warningLight || '#FEF3C7' }]}
-                    hitSlop={8}
-                  >
-                    <Archive size={14} color={colors.warning || '#D97706'} />
-                  </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => {
+                        updateProduct(editingId, { isAvailableForSale: !isAvailable } as Partial<Product>);
+                      }}
+                      style={[detailStyles.editBtn, { backgroundColor: isAvailable ? colors.successLight : colors.dangerLight }]}
+                      hitSlop={8}
+                    >
+                      {isAvailable ? <Eye size={14} color={colors.success} /> : <EyeOff size={14} color={colors.danger} />}
+                    </TouchableOpacity>
+                    {editProduct.isArchived || !editProduct.isActive ? (
+                      <TouchableOpacity
+                        onPress={() => { unarchiveProduct(editingId); setFormVisible(false); }}
+                        style={[detailStyles.editBtn, { backgroundColor: colors.successLight }]}
+                        hitSlop={8}
+                      >
+                        <Archive size={14} color={colors.success} />
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        onPress={() => { archiveProduct(editingId); setFormVisible(false); }}
+                        style={[detailStyles.editBtn, { backgroundColor: colors.warningLight || '#FEF3C7' }]}
+                        hitSlop={8}
+                      >
+                        <Archive size={14} color={colors.warning || '#D97706'} />
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => {
+                        confirm('Supprimer', `Supprimer définitivement « ${editProduct.name} » et toutes ses variantes ?`, [
+                          { text: 'Annuler', style: 'cancel' },
+                          { text: 'Supprimer', style: 'destructive', onPress: () => { deleteProduct(editingId); setFormVisible(false); } },
+                        ]);
+                      }}
+                      style={[detailStyles.editBtn, { backgroundColor: colors.dangerLight }]}
+                      hitSlop={8}
+                    >
+                      <Trash2 size={14} color={colors.danger} />
+                    </TouchableOpacity>
+                  </>
                 );
               })()}
               <TouchableOpacity onPress={() => setFormVisible(false)} hitSlop={8}>
@@ -1768,6 +2082,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
               {formStep === 1 && renderStep1()}
               {formStep === 2 && renderStep2()}
               {formStep === 3 && renderStep3()}
+              {formStep === 4 && renderStep4()}
             </View>
 
             <View style={[stepStyles.formFooter, { borderTopColor: colors.border }]}>
@@ -1788,17 +2103,23 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                     <Text style={stepStyles.nextBtnText}>{t('stock.save')}</Text>
                   </TouchableOpacity>
                 )}
-                {formStep < 3 ? (
-                  <TouchableOpacity style={[stepStyles.nextBtn, { backgroundColor: colors.primary }]} onPress={handleNextStep}>
-                    <Text style={stepStyles.nextBtnText}>{t('stock.next')}</Text>
-                    <ChevronRight size={14} color="#FFF" />
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity style={[stepStyles.nextBtn, { backgroundColor: colors.primary }]} onPress={handleFinalSubmit}>
-                    <Check size={14} color="#FFF" />
-                    <Text style={stepStyles.nextBtnText}>{isEditing ? t('stock.update') : t('stock.create')}</Text>
-                  </TouchableOpacity>
-                )}
+                {(() => {
+                  const isLastStep = isTransformedType ? formStep === 4 : formStep === 3;
+                  if (isLastStep) {
+                    return (
+                      <TouchableOpacity style={[stepStyles.nextBtn, { backgroundColor: colors.primary }]} onPress={handleFinalSubmit}>
+                        <Check size={14} color="#FFF" />
+                        <Text style={stepStyles.nextBtnText}>{isEditing ? t('stock.update') : t('stock.create')}</Text>
+                      </TouchableOpacity>
+                    );
+                  }
+                  return (
+                    <TouchableOpacity style={[stepStyles.nextBtn, { backgroundColor: colors.primary }]} onPress={handleNextStep}>
+                      <Text style={stepStyles.nextBtnText}>{t('stock.next')}</Text>
+                      <ChevronRight size={14} color="#FFF" />
+                    </TouchableOpacity>
+                  );
+                })()}
               </View>
             </View>
           </Pressable>
@@ -1917,7 +2238,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => {
-                    Alert.alert(t('stock.deleteAttribute'), t('stock.deleteAttributeConfirm', { name: attr.name }), [
+                    confirm(t('stock.deleteAttribute'), t('stock.deleteAttributeConfirm', { name: attr.name }), [
                       { text: 'Annuler', style: 'cancel' },
                       { text: 'Supprimer', style: 'destructive', onPress: () => deleteProductAttribute(attr.id) },
                     ]);
@@ -2321,7 +2642,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                           activeOpacity={0.7}
                           onPress={() => openProductDetail(product.id)}
                           onLongPress={() => {
-                            Alert.alert(product.name, '', [
+                            confirm(product.name, 'Que souhaitez-vous faire ?', [
                               { text: 'Voir la fiche', onPress: () => openProductDetail(product.id) },
                               { text: 'Modifier', onPress: () => openEdit(product.id) },
                               ...(product.isArchived ? [{ text: 'Désarchiver', onPress: () => { unarchiveProduct(product.id); } }] : [{ text: 'Archiver', style: 'destructive' as const, onPress: () => setArchiveConfirm(product.id) }]),
@@ -2376,7 +2697,7 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                       key={product.id} activeOpacity={0.7}
                       onPress={() => openProductDetail(product.id)}
                       onLongPress={() => {
-                        Alert.alert(product.name, '', [
+                        confirm(product.name, 'Que souhaitez-vous faire ?', [
                           { text: 'Voir la fiche', onPress: () => openProductDetail(product.id) },
                           { text: 'Modifier', onPress: () => openEdit(product.id) },
                           ...(product.isArchived ? [{ text: 'Désarchiver', onPress: () => { unarchiveProduct(product.id); } }] : [{ text: 'Archiver', style: 'destructive' as const, onPress: () => setArchiveConfirm(product.id) }]),
@@ -2468,6 +2789,25 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
       {renderFormModal()}
       {selectedProductId && renderProductDetail()}
       {renderVariantFormModal()}
+
+      <RecipeEditor
+        visible={recipeEditorVisible}
+        onClose={() => setRecipeEditorVisible(false)}
+        productId={recipeEditorProductId}
+        variantId={recipeEditorVariantId}
+        productName={recipeEditorProductName}
+        variantLabel={recipeEditorVariantLabel}
+        onRecipeSaved={(totalCost) => {
+          if (recipeEditorVariantId) {
+            const variant = getVariantsForProduct(recipeEditorProductId).find(v => v.id === recipeEditorVariantId);
+            if (variant) {
+              updateVariantFn(recipeEditorVariantId, { purchasePrice: totalCost }, { silent: true });
+            }
+          } else {
+            updateProduct(recipeEditorProductId, { purchasePrice: totalCost });
+          }
+        }}
+      />
 
       <ConfirmModal
         visible={archiveConfirm !== null}
@@ -2598,17 +2938,6 @@ export default function ProductsScreen({ embedded = false }: { embedded?: boolea
                 }));
                 createVariantsBatch(productId, batchData);
                 variantsCreated += batchData.length;
-              } else {
-                createVariant({
-                  productId,
-                  attributes: {},
-                  sku: prodSku,
-                  purchasePrice: prodData.purchasePrice,
-                  salePrice: prodData.salePrice,
-                  stockQuantity: prodData.stockQuantity,
-                  minStock: prodData.lowStockThreshold,
-                  isActive: true,
-                });
               }
             }
           }

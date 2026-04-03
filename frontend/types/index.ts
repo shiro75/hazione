@@ -1,5 +1,5 @@
 /**
- * @fileoverview Core type definitions for HaziOne.
+ * @fileoverview Core type definitions for BizManage France SaaS.
  * Contains all interfaces, enums, and type aliases used across the application
  * including business entities (invoices, quotes, products), user management,
  * shop/e-commerce, and theme configuration.
@@ -200,6 +200,7 @@ export interface Product {
   imageUrls?: string[];
   isActive: boolean;
   isArchived: boolean;
+  isAvailableForSale?: boolean;
   usedInValidatedInvoice: boolean;
   createdAt: string;
   updatedAt: string;
@@ -243,7 +244,7 @@ export interface Client {
   updatedAt: string;
 }
 
-export type ProductType = 'matiere_premiere' | 'consommable' | 'produit_transforme' | 'produit_revendu' | 'service';
+export type ProductType = 'matiere_premiere' | 'consommable' | 'produit_fini' | 'produit_transforme' | 'produit_revendu' | 'service';
 
 export type ProductStatus = 'active' | 'inactive';
 
@@ -905,6 +906,26 @@ export interface ApiKey {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+}
+
+export interface RecipeItem {
+  id: string;
+  ingredientProductId: string;
+  ingredientProductName: string;
+  ingredientVariantId?: string;
+  ingredientVariantLabel?: string;
+  quantity: number;
+  unit: string;
+}
+
+export interface Recipe {
+  id: string;
+  productId: string;
+  variantId?: string;
+  companyId: string;
+  items: RecipeItem[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type ThemeMode = 'light' | 'dark';

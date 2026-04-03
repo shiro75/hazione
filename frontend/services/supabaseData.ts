@@ -602,6 +602,37 @@ function mapSupplierInvoiceToDB(si: Partial<SupplierInvoice>): Record<string, un
   return m;
 }
 
+// ====== RECIPE ======
+
+function mapRecipeFromDB(row: Record<string, unknown>): { id: string; productId: string; variantId?: string; companyId: string; items: unknown[]; createdAt: string; updatedAt: string } {
+  let items: unknown[] = [];
+  if (Array.isArray(row.items)) {
+    items = row.items;
+  } else if (typeof row.items === 'string') {
+    try { items = JSON.parse(row.items); } catch { items = []; }
+  }
+  return {
+    id: row.id as string,
+    productId: row.product_id as string,
+    variantId: (row.variant_id as string) || undefined,
+    companyId: row.company_id as string,
+    items,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  };
+}
+
+function mapRecipeToDB(r: { id?: string; productId?: string; variantId?: string; companyId?: string; items?: unknown[]; updatedAt?: string }): Record<string, unknown> {
+  const m: Record<string, unknown> = {};
+  if (r.id !== undefined) m.id = r.id;
+  if (r.productId !== undefined) m.product_id = r.productId;
+  if (r.variantId !== undefined) m.variant_id = r.variantId || null;
+  if (r.companyId !== undefined) m.company_id = r.companyId;
+  if (r.items !== undefined) m.items = r.items;
+  if (r.updatedAt !== undefined) m.updated_at = r.updatedAt;
+  return m;
+}
+
 // ====== STOCK MOVEMENT ======
 
 function mapStockMovementFromDB(row: Record<string, unknown>): StockMovementRecord {
@@ -1098,6 +1129,39 @@ export const db = {
       const { error } = await supabase.from('products').update({ stock_quantity: newStockQuantity, updated_at: new Date().toISOString() }).eq('id', productId);
       if (error) throw new Error(`[DB] updateProductStock: ${error.message}`);
 
+    });
+  },
+
+  // --- Recipes ---
+  async fetchRecipes(companyId: string): Promise<{ id: string; productId: string; variantId?: string; companyId: string; items: unknown[]; createdAt: string; updatedAt: string }[]> {
+    return safeFetch('fetchRecipes', [], async () => {
+      const { data, error } = await supabase.from('product_recipes').select('*').eq('company_id', companyId).order('created_at', { ascending: false });
+      if (error) { logNetworkWarningOnce('fetchRecipes'); return []; }
+      return (data as Record<string, unknown>[]).map(mapRecipeFromDB);
+    });
+  },
+
+  async upsertRecipe(recipe: { id: string; productId: string; variantId?: string; companyId: string; items: unknown[]; updatedAt: string }): Promise<void> {
+    return safeMutate('upsertRecipe', async () => {
+      const payload = mapRecipeToDB(recipe);
+      payload.created_at = payload.created_at || new Date().toISOString();
+      payload.updated_at = recipe.updatedAt;
+      const { error } = await supabase.from('product_recipes').upsert(payload);
+      if (error) throw new Error(`[DB] upsertRecipe: ${error.message}`);
+    });
+  },
+
+  async deleteRecipe(recipeId: string): Promise<void> {
+    return safeMutate('deleteRecipe', async () => {
+      const { error } = await supabase.from('product_recipes').delete().eq('id', recipeId);
+      if (error) throw new Error(`[DB] deleteRecipe: ${error.message}`);
+    });
+  },
+
+  async deleteRecipesForProduct(productId: string): Promise<void> {
+    return safeMutate('deleteRecipesForProduct', async () => {
+      const { error } = await supabase.from('product_recipes').delete().eq('product_id', productId);
+      if (error) throw new Error(`[DB] deleteRecipesForProduct: ${error.message}`);
     });
   },
 

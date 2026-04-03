@@ -19,6 +19,7 @@ import type {
   RecurringInvoice, RecurringFrequency, DeliveryNote, DeliveryNoteStatus,
   Warehouse, WarehouseTransfer,
   PaymentReminderLog, PaymentReminderChannel,
+  Recipe, RecipeItem,
 } from '@/types';
 import { MODULE_CONFIGS, isModuleAvailableForPlan } from '@/constants/modules';
 import { db } from '@/services/supabaseData';
@@ -86,6 +87,7 @@ export const [DataProvider, useData] = createContextHook(() => {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseTransfers, setWarehouseTransfers] = useState<WarehouseTransfer[]>([]);
   const [paymentReminderLogs, setPaymentReminderLogs] = useState<PaymentReminderLog[]>([]);
+  const [recipes, setRecipes] = useState<Recipe[]>([]);
 
   const [productAttributes, setProductAttributes] = useState<ProductAttribute[]>([
     { id: 'attr_taille', companyId: '', name: 'Taille', values: ['XS', 'S', 'M', 'L', 'XL', 'XXL'], createdAt: new Date().toISOString() },
@@ -113,8 +115,6 @@ export const [DataProvider, useData] = createContextHook(() => {
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
-
-
 
   // ====== QUERIES ======
 
@@ -327,6 +327,27 @@ export const [DataProvider, useData] = createContextHook(() => {
     await AsyncStorage.setItem(`product-attributes-${COMPANY_ID}`, JSON.stringify(attrs));
   }, [COMPANY_ID]);
 
+  // ====== RECIPES (AsyncStorage-based) ======
+
+  const recipesQuery = useQuery({
+    queryKey: ['recipes', COMPANY_ID],
+    queryFn: async () => {
+      const stored = await AsyncStorage.getItem(`recipes-${COMPANY_ID}`);
+      if (stored) return JSON.parse(stored) as Recipe[];
+      return null;
+    },
+  });
+
+  useEffect(() => {
+    if (recipesQuery.data) {
+      setRecipes(recipesQuery.data);
+    }
+  }, [recipesQuery.data]);
+
+  const persistRecipes = useCallback(async (data: Recipe[]) => {
+    await AsyncStorage.setItem(`recipes-${COMPANY_ID}`, JSON.stringify(data));
+  }, [COMPANY_ID]);
+
   const addProductAttribute = useCallback((name: string, values: string[]) => {
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -381,6 +402,24 @@ export const [DataProvider, useData] = createContextHook(() => {
     setProductAttributes(updated);
     void persistProductAttributes(updated);
   }, [productAttributes, persistProductAttributes]);
+
+  const updateAttributeValuesOrder = useCallback((attrId: string, newValues: string[]) => {
+    const updated = productAttributes.map(a => {
+      if (a.id !== attrId) return a;
+      return { ...a, values: newValues };
+    });
+    setProductAttributes(updated);
+    void persistProductAttributes(updated);
+  }, [productAttributes, persistProductAttributes]);
+
+  const reorderAttributeValue = useCallback((attrId: string, fromIndex: number, toIndex: number) => {
+    const attr = productAttributes.find(a => a.id === attrId);
+    if (!attr) return;
+    const newValues = [...attr.values];
+    const [removed] = newValues.splice(fromIndex, 1);
+    newValues.splice(toIndex, 0, removed);
+    updateAttributeValuesOrder(attrId, newValues);
+  }, [productAttributes, updateAttributeValuesOrder]);
 
   const persistCategories = useCallback(async (cats: string[]) => {
     await AsyncStorage.setItem(`product-categories-${COMPANY_ID}`, JSON.stringify(cats));
@@ -559,38 +598,6 @@ export const [DataProvider, useData] = createContextHook(() => {
   const getClientReminderLogs = useCallback((clientId: string): PaymentReminderLog[] => {
     return paymentReminderLogs.filter(r => r.clientId === clientId);
   }, [paymentReminderLogs]);
-
-
-  const reorderAttributeValue = useCallback((
-    attributeId: string, 
-    oldIndex: number, 
-    newIndex: number
-  ) => {
-    setProductAttributes(prev => prev.map(attr => {
-      if (attr.id !== attributeId) return attr;
-      
-      const newValues = [...attr.values];
-      const [movedValue] = newValues.splice(oldIndex, 1);
-      newValues.splice(newIndex, 0, movedValue);
-      
-      return { ...attr, values: newValues };
-    }));
-  }, []);
-
-  const updateAttributeValuesOrder = useCallback((
-    attributeId: string, 
-    newValues: string[]
-  ) => {
-    setProductAttributes(prev => prev.map(attr => {
-      if (attr.id !== attributeId) return attr;
-      return { ...attr, values: newValues };
-    }));
-    void persistProductAttributes(productAttributes.map(attr => 
-      attr.id === attributeId ? { ...attr, values: newValues } : attr
-    ));
-  }, [productAttributes, persistProductAttributes]);
-
-
 
   // ====== MODULES CONFIG ======
 
@@ -830,7 +837,8 @@ export const [DataProvider, useData] = createContextHook(() => {
 
   const createProduct = useCallback((data: Omit<Product, 'id' | 'companyId' | 'isArchived' | 'usedInValidatedInvoice' | 'createdAt' | 'updatedAt'>): { success: boolean; error?: string; productId?: string } => {
     if (!data.name.trim()) return { success: false, error: 'Le nom est requis' };
-    if (data.salePrice <= 0) return { success: false, error: 'Le prix de vente doit être positif' };
+    const isRawMat = data.type === 'matiere_premiere';
+    if (!isRawMat && data.salePrice <= 0) return { success: false, error: 'Le prix de vente doit être positif' };
     const now = new Date().toISOString();
     const newProduct: Product = {
       ...data,
@@ -1304,6 +1312,137 @@ export const [DataProvider, useData] = createContextHook(() => {
     return `VEN-${year}-${num}`;
   }, [saleNextNumber]);
 
+  // ====== RECIPES ======
+
+  const getRecipeForProduct = useCallback((productId: string, variantId?: string): Recipe | undefined => {
+    if (variantId) {
+      const variantRecipe = recipes.find(r => r.productId === productId && r.variantId === variantId);
+      if (variantRecipe) return variantRecipe;
+    }
+    return recipes.find(r => r.productId === productId && !r.variantId);
+  }, [recipes]);
+
+  const getRecipesForProduct = useCallback((productId: string): Recipe[] => {
+    return recipes.filter(r => r.productId === productId);
+  }, [recipes]);
+
+  const saveRecipe = useCallback((productId: string, items: RecipeItem[], variantId?: string): { success: boolean; error?: string } => {
+    if (items.length === 0) return { success: false, error: 'Au moins un ingredient est requis' };
+    const invalidItem = items.find(i => i.quantity <= 0);
+    if (invalidItem) return { success: false, error: 'Toutes les quantites doivent etre superieures a 0' };
+
+    const now = new Date().toISOString();
+    const existingIdx = recipes.findIndex(r => r.productId === productId && (variantId ? r.variantId === variantId : !r.variantId));
+
+    let updated: Recipe[];
+    if (existingIdx >= 0) {
+      updated = recipes.map((r, i) => i === existingIdx ? { ...r, items, updatedAt: now } : r);
+    } else {
+      const newRecipe: Recipe = {
+        id: generateId('recipe'),
+        productId,
+        variantId,
+        companyId: COMPANY_ID,
+        items,
+        createdAt: now,
+        updatedAt: now,
+      };
+      updated = [...recipes, newRecipe];
+    }
+    setRecipes(updated);
+    queryClient.setQueryData(['recipes', COMPANY_ID], updated);
+    void persistRecipes(updated);
+    showToast('Recette enregistree');
+    return { success: true };
+  }, [recipes, COMPANY_ID, persistRecipes, showToast, queryClient]);
+
+  const deleteRecipe = useCallback((productId: string, variantId?: string) => {
+    const updated = recipes.filter(r => !(r.productId === productId && (variantId ? r.variantId === variantId : !r.variantId)));
+    setRecipes(updated);
+    queryClient.setQueryData(['recipes', COMPANY_ID], updated);
+    void persistRecipes(updated);
+    showToast('Recette supprimee');
+  }, [recipes, persistRecipes, showToast, queryClient, COMPANY_ID]);
+
+  const deleteAllRecipesForProduct = useCallback((productId: string) => {
+    const updated = recipes.filter(r => r.productId !== productId);
+    setRecipes(updated);
+    queryClient.setQueryData(['recipes', COMPANY_ID], updated);
+    void persistRecipes(updated);
+  }, [recipes, persistRecipes, queryClient, COMPANY_ID]);
+
+  const deductRecipeIngredients = useCallback((productId: string, saleQuantity: number, saleNumber: string, variantId?: string) => {
+    const recipe = getRecipeForProduct(productId, variantId);
+    if (!recipe || recipe.items.length === 0) return;
+
+    const now = new Date().toISOString();
+    recipe.items.forEach((ingredient) => {
+      const deductQty = ingredient.quantity * saleQuantity;
+      const ingredientProduct = products.find(p => p.id === ingredient.ingredientProductId);
+      if (!ingredientProduct) return;
+
+      const ingredientVariants = variants.filter(v => v.productId === ingredient.ingredientProductId);
+
+      if (ingredient.ingredientVariantId) {
+        const targetVariant = ingredientVariants.find(v => v.id === ingredient.ingredientVariantId);
+        if (targetVariant) {
+          const newVarStock = Math.max(0, targetVariant.stockQuantity - deductQty);
+          queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+            (old ?? []).map(vr => vr.id === targetVariant.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+          );
+          db.updateVariant(targetVariant.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+
+          const totalProductStock = ingredientVariants.reduce((s, v) =>
+            s + (v.id === targetVariant.id ? newVarStock : v.stockQuantity), 0
+          );
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === ingredient.ingredientProductId ? { ...p, stockQuantity: totalProductStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(ingredient.ingredientProductId, totalProductStock).catch(() => {});
+        }
+      } else {
+        if (ingredientVariants.length >= 1) {
+          const sortedVariants = [...ingredientVariants].sort((a, b) => b.stockQuantity - a.stockQuantity);
+          const firstAvailable = sortedVariants.find(v => v.stockQuantity > 0) || sortedVariants[0];
+          const newVarStock = Math.max(0, firstAvailable.stockQuantity - deductQty);
+          queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+            (old ?? []).map(vr => vr.id === firstAvailable.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+          );
+          db.updateVariant(firstAvailable.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+          const totalProductStock = ingredientVariants.reduce((s, v) =>
+            s + (v.id === firstAvailable.id ? newVarStock : v.stockQuantity), 0
+          );
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === ingredient.ingredientProductId ? { ...p, stockQuantity: totalProductStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(ingredient.ingredientProductId, totalProductStock).catch(() => {});
+        } else {
+          const currentStock = ingredientProduct.stockQuantity;
+          const newStock = Math.max(0, currentStock - deductQty);
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === ingredient.ingredientProductId ? { ...p, stockQuantity: newStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(ingredient.ingredientProductId, newStock).catch(() => {});
+        }
+      }
+
+      const sm: StockMovementRecord = {
+        id: generateId('sm'),
+        companyId: COMPANY_ID,
+        productId: ingredient.ingredientProductId,
+        productName: ingredient.ingredientProductName,
+        variantId: ingredient.ingredientVariantId,
+        type: 'sale_out',
+        quantity: -deductQty,
+        reference: saleNumber,
+        notes: `Deduction recette - Vente ${saleNumber}`,
+        createdAt: now,
+      };
+      queryClient.setQueryData<StockMovementRecord[]>(QUERY_KEYS.stockMovements, (old) => [sm, ...(old ?? [])]);
+      db.insertStockMovement(sm).catch(() => {});
+    });
+  }, [getRecipeForProduct, products, variants, queryClient, QUERY_KEYS, COMPANY_ID]);
+
   const createSale = useCallback((
     items: SaleItem[],
     paymentMethod: SalePaymentMethod,
@@ -1374,13 +1513,55 @@ export const [DataProvider, useData] = createContextHook(() => {
         };
         queryClient.setQueryData<StockMovementRecord[]>(QUERY_KEYS.stockMovements, (old) => [sm, ...(old ?? [])]);
         db.insertStockMovement(sm).catch(() => {});
+
+        const saleVariantId = (item as SaleItem & { variantId?: string }).variantId;
+        const productVariants = variants.filter(v => v.productId === item.productId);
+        if (saleVariantId) {
+          const targetVariant = productVariants.find(v => v.id === saleVariantId);
+          if (targetVariant) {
+            const newVarStock = Math.max(0, targetVariant.stockQuantity - item.quantity);
+            queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+              (old ?? []).map(vr => vr.id === targetVariant.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+            );
+            db.updateVariant(targetVariant.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+            const totalProductStock = productVariants.reduce((s, v) =>
+              s + (v.id === targetVariant.id ? newVarStock : v.stockQuantity), 0
+            );
+            queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+              (old ?? []).map(p => p.id === item.productId ? { ...p, stockQuantity: totalProductStock, updatedAt: now } : p)
+            );
+            db.updateProductStock(item.productId, totalProductStock).catch(() => {});
+          }
+        } else if (productVariants.length === 1) {
+          const v = productVariants[0];
+          const newVarStock = Math.max(0, v.stockQuantity - item.quantity);
+          queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+            (old ?? []).map(vr => vr.id === v.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+          );
+          db.updateVariant(v.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === item.productId ? { ...p, stockQuantity: newVarStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(item.productId, newVarStock).catch(() => {});
+        } else if (productVariants.length === 0) {
+          const currentStock = product.stockQuantity;
+          const newStock = Math.max(0, currentStock - item.quantity);
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === item.productId ? { ...p, stockQuantity: newStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(item.productId, newStock).catch(() => {});
+        }
+
+        if (product.type === 'produit_transforme' || product.type === 'produit_fini') {
+          deductRecipeIngredients(item.productId, item.quantity, saleNumber, saleVariantId);
+        }
       }
     });
 
     void writeAudit('create', 'sale', newSale.id, saleNumber, `Vente ${saleNumber} encaissée - ${totalTTC.toFixed(2)} ${company.currency || 'EUR'}`);
     showToast(`Vente ${saleNumber} encaissée avec succès`);
     return { success: true, saleId: newSale.id };
-  }, [clients, products, generateSaleNumber, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS]);
+  }, [clients, products, variants, generateSaleNumber, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS, deductRecipeIngredients, company.currency]);
 
   const refundSale = useCallback((saleId: string): { success: boolean; error?: string } => {
     const sale = sales.find((s) => s.id === saleId);
@@ -1673,12 +1854,32 @@ export const [DataProvider, useData] = createContextHook(() => {
         };
         queryClient.setQueryData<StockMovementRecord[]>(QUERY_KEYS.stockMovements, (old) => [sm, ...(old ?? [])]);
         db.insertStockMovement(sm).catch(() => {});
+
+        const productVariants = variants.filter(v => v.productId === item.productId);
+        if (productVariants.length === 1) {
+          const v = productVariants[0];
+          const newVarStock = v.stockQuantity + item.quantity;
+          queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+            (old ?? []).map(vr => vr.id === v.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+          );
+          db.updateVariant(v.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === item.productId ? { ...p, stockQuantity: newVarStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(item.productId, newVarStock).catch(() => {});
+        } else if (productVariants.length === 0) {
+          const newStock = product.stockQuantity + item.quantity;
+          queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+            (old ?? []).map(p => p.id === item.productId ? { ...p, stockQuantity: newStock, updatedAt: now } : p)
+          );
+          db.updateProductStock(item.productId, newStock).catch(() => {});
+        }
       }
     });
     void writeAudit('update', 'purchase_order', id, po.number, `Commande ${po.number} reçue - stock mis à jour`);
     showToast(`Commande ${po.number} reçue - stock mis à jour`);
     return { success: true };
-  }, [purchaseOrders, products, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS]);
+  }, [purchaseOrders, products, variants, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS]);
 
   // ====== SUPPLIER INVOICES CRUD ======
 
@@ -1901,12 +2102,53 @@ export const [DataProvider, useData] = createContextHook(() => {
 
   // ====== STOCK MOVEMENTS ======
 
-  const createStockAdjustment = useCallback((productId: string, quantity: number, notes: string): { success: boolean; error?: string } => {
+  const createStockAdjustment = useCallback((productId: string, quantity: number, notes: string, targetVariantId?: string): { success: boolean; error?: string } => {
     const product = products.find((p) => p.id === productId);
     if (!product) return { success: false, error: 'Produit introuvable' };
     if (!notes.trim()) return { success: false, error: 'Le motif est obligatoire' };
     const now = new Date().toISOString();
-    const currentStock = getProductStock(productId);
+    const productVariants = variants.filter(v => v.productId === productId);
+
+    if (targetVariantId) {
+      const targetVariant = productVariants.find(v => v.id === targetVariantId);
+      if (!targetVariant) return { success: false, error: 'Variante introuvable' };
+      const newVarStock = targetVariant.stockQuantity + quantity;
+      if (newVarStock < 0) return { success: false, error: 'Le stock de la variante ne peut pas être négatif' };
+
+      queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
+        (old ?? []).map((vr) => vr.id === targetVariantId ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
+      );
+      db.updateVariant(targetVariantId, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
+
+      const totalProductStock = productVariants.reduce((s, v) =>
+        s + (v.id === targetVariantId ? newVarStock : v.stockQuantity), 0
+      );
+      queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+        (old ?? []).map((p) => p.id === productId ? { ...p, stockQuantity: totalProductStock, updatedAt: now } : p)
+      );
+      db.updateProductStock(productId, totalProductStock).catch(() => {});
+
+      const sm: StockMovementRecord = {
+        id: generateId('sm'),
+        companyId: COMPANY_ID,
+        productId,
+        productName: product.name,
+        variantId: targetVariantId,
+        type: 'inventory_correction',
+        quantity,
+        reference: `Ajustement manuel`,
+        notes,
+        createdAt: now,
+      };
+      queryClient.setQueryData<StockMovementRecord[]>(QUERY_KEYS.stockMovements, (old) => [sm, ...(old ?? [])]);
+      db.insertStockMovement(sm).catch(() => {});
+
+      void writeAudit('update', 'stock_movement', sm.id, product.name, `Ajustement stock ${product.name}: ${quantity > 0 ? '+' : ''}${quantity}`);
+      showToast(`Stock ajusté (${quantity > 0 ? '+' : ''}${quantity})`);
+      return { success: true };
+    }
+
+    const currentStock = product.stockQuantity;
     const newQty = currentStock + quantity;
     if (newQty < 0) return { success: false, error: 'Le stock ne peut pas être négatif' };
     const sm: StockMovementRecord = {
@@ -1926,41 +2168,21 @@ export const [DataProvider, useData] = createContextHook(() => {
     queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
       (old ?? []).map((p) => p.id === productId ? { ...p, stockQuantity: newQty, updatedAt: now } : p)
     );
-    db.updateProductStock(productId, newQty).catch(() => {
+    db.updateProductStock(productId, newQty).catch(() => {});
 
-    });
-
-    const productVariants = variants.filter(v => v.productId === productId);
     if (productVariants.length === 1) {
       const v = productVariants[0];
       const newVarStock = v.stockQuantity + quantity;
       queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
         (old ?? []).map((vr) => vr.id === v.id ? { ...vr, stockQuantity: newVarStock, updatedAt: now } : vr)
       );
-      db.updateVariant(v.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {
-
-      });
-    } else if (productVariants.length > 1) {
-      const totalVarStock = productVariants.reduce((s, v) => s + v.stockQuantity, 0);
-      queryClient.setQueryData<ProductVariant[]>(QUERY_KEYS.variants, (old) =>
-        (old ?? []).map((vr) => {
-          if (vr.productId !== productId) return vr;
-          const ratio = totalVarStock > 0 ? vr.stockQuantity / totalVarStock : 1 / productVariants.length;
-          const delta = Math.round(quantity * ratio);
-          return { ...vr, stockQuantity: vr.stockQuantity + delta, updatedAt: now };
-        })
-      );
-      productVariants.forEach(v => {
-        const ratio = totalVarStock > 0 ? v.stockQuantity / totalVarStock : 1 / productVariants.length;
-        const delta = Math.round(quantity * ratio);
-        db.updateVariant(v.id, { stockQuantity: v.stockQuantity + delta, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
-      });
+      db.updateVariant(v.id, { stockQuantity: newVarStock, updatedAt: now } as Partial<ProductVariant>).catch(() => {});
     }
 
     void writeAudit('update', 'stock_movement', sm.id, product.name, `Ajustement stock ${product.name}: ${quantity > 0 ? '+' : ''}${quantity}`);
     showToast(`Stock de "${product.name}" ajusté (${quantity > 0 ? '+' : ''}${quantity})`);
     return { success: true };
-  }, [products, variants, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS, getProductStock]);
+  }, [products, variants, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS]);
 
   // ====== REMINDERS ======
 
@@ -2673,8 +2895,6 @@ export const [DataProvider, useData] = createContextHook(() => {
     getProductTotalStock,
     getVariantStock,
     generateVariantSKU,
-    reorderAttributeValue,
-    updateAttributeValuesOrder,
     productStockMap,
     auditLogs,
     productAttributes,
@@ -2683,6 +2903,8 @@ export const [DataProvider, useData] = createContextHook(() => {
     deleteProductAttribute,
     addAttributeValue,
     removeAttributeValue,
+    updateAttributeValuesOrder,
+    reorderAttributeValue,
     sendInvoiceByEmail,
     sendQuoteByEmail,
     recurringInvoices,
@@ -2705,6 +2927,12 @@ export const [DataProvider, useData] = createContextHook(() => {
     paymentReminderLogs,
     logPaymentReminder,
     getClientReminderLogs,
+    recipes,
+    getRecipeForProduct,
+    getRecipesForProduct,
+    saveRecipe,
+    deleteRecipe,
+    deleteAllRecipesForProduct,
   }), [
     clients, activeClients, products, activeProducts, invoices, quotes, company, updateCompanySettings, toasts,
     showToast, dismissToast,
@@ -2732,7 +2960,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     getProductStock, getProductTotalStock, getVariantStock, generateVariantSKU, productStockMap,
     auditLogs,
     productAttributes, addProductAttribute, updateProductAttribute, deleteProductAttribute,
-    addAttributeValue, removeAttributeValue,
+    addAttributeValue, removeAttributeValue, updateAttributeValuesOrder, reorderAttributeValue,
     sendInvoiceByEmail, sendQuoteByEmail,
     recurringInvoices, createRecurringInvoice, toggleRecurringInvoice, generateRecurringInvoice, deleteRecurringInvoice,
     deliveryNotes, createDeliveryNote, updateDeliveryNoteStatus,
@@ -2741,5 +2969,6 @@ export const [DataProvider, useData] = createContextHook(() => {
     warehouses, warehouseTransfers,
     createWarehouse, updateWarehouse, deleteWarehouse, createWarehouseTransfer,
     paymentReminderLogs, logPaymentReminder, getClientReminderLogs,
+    recipes, getRecipeForProduct, getRecipesForProduct, saveRecipe, deleteRecipe, deleteAllRecipesForProduct,
   ]);
 });

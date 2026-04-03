@@ -15,6 +15,7 @@ import {
   ArrowUpDown as ArrowUpDownIcon, Plus, Pencil, Trash2, ArrowRightLeft, Warehouse,
   ArrowUp, ArrowDown, RotateCcw, ChevronDown, ChevronRight, Download,
 } from 'lucide-react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
 import { formatDate } from '@/utils/format';
@@ -93,7 +94,8 @@ export default function StockScreen() {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
-  const [activeTab, setActiveTab] = useState<StockTab>('catalogue');
+  const { tab } = useLocalSearchParams<{ tab?: string }>();
+  const [activeTab, setActiveTab] = useState<StockTab>((tab as StockTab) || 'catalogue');
   const { t } = useI18n();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -138,7 +140,7 @@ export default function StockScreen() {
 
 function InventaireSection({ isMobile }: { isMobile: boolean }) {
   const { colors } = useTheme();
-  const { activeProducts, createStockAdjustment, getProductStock, getVariantsForProduct } = useData();
+  const { activeProducts, createStockAdjustment, getProductStock, getVariantsForProduct, getRecipeForProduct, products: allProducts, variants: allVariants } = useData();
   const [filter, setFilter] = useState<'all' | 'low' | 'out' | 'negative'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'value'>('name');
   const [adjustModal, setAdjustModal] = useState<string | null>(null);
@@ -158,10 +160,47 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
     });
   }, []);
 
+  const countableProducts = useMemo(() =>
+    activeProducts.filter((p) => p.type !== 'service' && p.type !== 'produit_transforme' && p.type !== 'produit_fini'),
+    [activeProducts]
+  );
+
+  const transformedProducts = useMemo(() =>
+    activeProducts.filter((p) => p.type === 'produit_transforme' || p.type === 'produit_fini'),
+    [activeProducts]
+  );
+
   const physicalProducts = useMemo(() =>
     activeProducts.filter((p) => p.type !== 'service'),
     [activeProducts]
   );
+
+  const getTheoreticalStock = useCallback((product: typeof activeProducts[0]): number | null => {
+    const recipe = getRecipeForProduct(product.id);
+    if (!recipe || recipe.items.length === 0) return null;
+    let minProducible = Infinity;
+    for (const item of recipe.items) {
+      const ingredientProduct = allProducts.find(p => p.id === item.ingredientProductId);
+      if (!ingredientProduct) return null;
+      let availableStock = 0;
+      if (item.ingredientVariantId) {
+        const variant = allVariants.find(v => v.id === item.ingredientVariantId);
+        availableStock = variant?.stockQuantity ?? 0;
+      } else {
+        const pvs = getVariantsForProduct(item.ingredientProductId);
+        if (pvs.length > 0) {
+          availableStock = pvs.reduce((s, v) => s + v.stockQuantity, 0);
+        } else {
+          availableStock = getProductStock(item.ingredientProductId);
+        }
+      }
+      if (item.quantity > 0) {
+        const canProduce = Math.floor(availableStock / item.quantity);
+        minProducible = Math.min(minProducible, canProduce);
+      }
+    }
+    return minProducible === Infinity ? null : minProducible;
+  }, [getRecipeForProduct, allProducts, allVariants, getVariantsForProduct, getProductStock]);
 
   const getStockForProduct = useCallback((productId: string): number => {
     const pv = getVariantsForProduct(productId);
@@ -215,26 +254,26 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
     return { lowStockCount, outOfStockCount };
   }, [physicalProducts, getVariantsForProduct, getProductStock]);
 
-  const filtered = useMemo(() => {
-    let list: typeof physicalProducts;
-    if (filter === 'low') list = physicalProducts.filter((p) => {
+  const applyFilter = useCallback((list: typeof physicalProducts) => {
+    let result: typeof physicalProducts;
+    if (filter === 'low') result = list.filter((p) => {
       const pv = getVariantsForProduct(p.id);
       if (pv.length > 0) return pv.some(v => v.stockQuantity > 0 && v.stockQuantity <= (v.minStock || p.lowStockThreshold));
       const stock = getProductStock(p.id);
       return stock > 0 && stock <= p.lowStockThreshold;
     });
-    else if (filter === 'out') list = physicalProducts.filter((p) => {
+    else if (filter === 'out') result = list.filter((p) => {
       const pv = getVariantsForProduct(p.id);
       if (pv.length > 0) return pv.some(v => v.stockQuantity === 0);
       return getProductStock(p.id) === 0;
     });
-    else if (filter === 'negative') list = physicalProducts.filter((p) => {
+    else if (filter === 'negative') result = list.filter((p) => {
       const pv = getVariantsForProduct(p.id);
       if (pv.length > 0) return pv.some(v => v.stockQuantity < 0);
       return getProductStock(p.id) < 0;
     });
-    else list = physicalProducts;
-    return [...list].sort((a, b) => {
+    else result = list;
+    return [...result].sort((a, b) => {
       switch (sortBy) {
         case 'name': return a.name.localeCompare(b.name);
         case 'stock': return getStockForProduct(a.id) - getStockForProduct(b.id);
@@ -242,7 +281,15 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
         default: return 0;
       }
     });
-  }, [physicalProducts, filter, getStockForProduct, getVariantsForProduct, getProductStock, sortBy]);
+  }, [filter, getStockForProduct, getVariantsForProduct, getProductStock, sortBy]);
+
+  const filtered = useMemo(() => applyFilter(countableProducts), [countableProducts, applyFilter]);
+  const filteredTransformed = useMemo(() => {
+    let list = transformedProducts;
+    if (filter !== 'all') list = applyFilter(list);
+    else list = [...list].sort((a, b) => a.name.localeCompare(b.name));
+    return list;
+  }, [transformedProducts, filter, applyFilter]);
 
   const handleAdjust = useCallback(() => {
     if (!adjustModal) return;
@@ -264,13 +311,14 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
         const qtyStr = adjustVariantQtys[v.id] || '';
         const qty = parseInt(qtyStr, 10);
         if (!isNaN(qty) && qty !== 0) {
-          createStockAdjustment(adjustModal, qty, `${adjustNotes} (variante: ${Object.values(v.attributes).join('/')})`);
+          createStockAdjustment(adjustModal, qty, `${adjustNotes} (variante: ${Object.values(v.attributes).join('/')})`, v.id);
         }
       }
     } else {
       const qty = parseInt(adjustQty, 10);
       if (isNaN(qty) || qty === 0) { setAdjustError('Quantité invalide'); return; }
-      const result = createStockAdjustment(adjustModal, qty, adjustNotes);
+      const singleVariant = pVariants.length === 1 ? pVariants[0].id : undefined;
+      const result = createStockAdjustment(adjustModal, qty, adjustNotes, singleVariant);
       if (!result.success) { setAdjustError(result.error || 'Erreur'); return; }
     }
     setAdjustModal(null);
@@ -344,15 +392,18 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
         ))}
       </ScrollView>
 
-      {filtered.length === 0 ? (
+      {countableProducts.length > 0 && (
+        <Text style={[invStyles.sectionTitle, { color: colors.text }]}>Matieres premieres / Consommables</Text>
+      )}
+
+      {filtered.length === 0 && countableProducts.length > 0 ? (
         <View style={styles.emptyState}>
           <View style={[styles.emptyIconCircle, { backgroundColor: colors.surfaceHover }]}>
             <Package size={32} color={colors.textTertiary} />
           </View>
           <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>{filter !== 'all' ? 'Aucun produit dans ce filtre' : 'Aucun produit en stock'}</Text>
-          <Text style={[styles.emptySubtitle, { color: colors.textTertiary }]}>Ajoutez des produits dans le catalogue pour gérer votre inventaire</Text>
         </View>
-      ) : (
+      ) : filtered.length > 0 ? (
         <>
         {isMobile && filtered.length > 0 && (
           <View style={[styles.inventoryHeaderRowMobile, { backgroundColor: '#F9FAFB', borderColor: colors.border }]}>
@@ -490,6 +541,9 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
                                 </View>
                               </View>
                             )}
+                            {!isMobile && (
+                              <View style={{ flex: 0.6 }} />
+                            )}
                             {isMobile && (
                               <View style={[invStyles.variantStatusBadge, { backgroundColor: variantStatus.bgColor }]}>
                                 <Text style={[invStyles.variantStatusText, { color: variantStatus.color }]}>
@@ -508,6 +562,199 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
           })}
         </View>
         </>
+      ) : null}
+
+      {transformedProducts.length > 0 && (
+        <Text style={[invStyles.sectionTitle, { color: colors.text, marginTop: 16 }]}>Produits transformes - Stock theorique</Text>
+      )}
+
+      {filteredTransformed.length > 0 && (
+        <>
+        {isMobile && (
+          <View style={[styles.inventoryHeaderRowMobile, { backgroundColor: '#F9FAFB', borderColor: colors.border }]}>
+            <Text style={[styles.inventoryColHeader, { flex: 1 }]}>PRODUIT</Text>
+            <Text style={[styles.inventoryColHeader, { textAlign: 'right' as const }]}>STOCK THEORIQUE</Text>
+          </View>
+        )}
+        <View style={[styles.tableCard, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+          {!isMobile && (
+            <View style={[styles.inventoryHeaderRow, { backgroundColor: '#F9FAFB', borderBottomWidth: 1, borderBottomColor: colors.border }]}>
+              <Text style={[styles.inventoryColHeader, { flex: 2 }]}>PRODUIT</Text>
+              <Text style={[styles.inventoryColHeader, { flex: 1, textAlign: 'center' as const }]}>STOCK THEORIQUE</Text>
+              <Text style={[styles.inventoryColHeader, { flex: 1, textAlign: 'center' as const }]}>RECETTE</Text>
+              <Text style={[styles.inventoryColHeader, { flex: 0.8, textAlign: 'center' as const }]}>STATUT</Text>
+            </View>
+          )}
+          {filteredTransformed.map((product, i) => {
+            const theoreticalStock = getTheoreticalStock(product);
+            const hasRecipe = theoreticalStock !== null;
+            const stockLabel = hasRecipe ? `${theoreticalStock}` : '\u2014';
+            const statusColor = !hasRecipe ? colors.textTertiary : theoreticalStock <= 0 ? colors.danger : theoreticalStock <= product.lowStockThreshold ? colors.warning : colors.success;
+            const statusBg = !hasRecipe ? colors.surfaceHover : theoreticalStock <= 0 ? colors.dangerLight : theoreticalStock <= product.lowStockThreshold ? colors.warningLight : colors.successLight;
+            const statusLabel = !hasRecipe ? 'Sans recette' : theoreticalStock <= 0 ? 'Rupture' : theoreticalStock <= product.lowStockThreshold ? 'Bas' : 'OK';
+            const pVariants = getVariantsForProduct(product.id).filter(v => Object.keys(v.attributes).length > 0);
+            const hasVariants = pVariants.length > 0;
+            const isExpanded = expandedProducts.has(product.id);
+            return (
+              <View key={product.id}>
+                <TouchableOpacity
+                  activeOpacity={hasVariants ? 0.7 : 1}
+                  onPress={() => { if (hasVariants) toggleExpand(product.id); }}
+                  style={[styles.productRow, i < filteredTransformed.length - 1 && !isExpanded && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }, i % 2 === 1 && { backgroundColor: colors.surfaceHover + '60' }]}
+                >
+                  <View style={styles.productRowMain}>
+                    <View style={[styles.productInfo, !isMobile && { flex: 2 }]}>
+                      <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 }}>
+                        {hasVariants && (
+                          isExpanded
+                            ? <ChevronDown size={14} color={colors.textTertiary} />
+                            : <ChevronRight size={14} color={colors.textTertiary} />
+                        )}
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.productName, { color: colors.text }]}>{product.name}</Text>
+                          <Text style={[styles.productSku, { color: colors.textTertiary }]}>{product.sku}</Text>
+                        </View>
+                      </View>
+                      {hasVariants && (
+                        <Text style={{ fontSize: 10, color: colors.textTertiary, marginTop: 2 }}>{pVariants.length} variante{pVariants.length > 1 ? 's' : ''}</Text>
+                      )}
+                    </View>
+                    <View style={[!isMobile && { flex: 1, alignItems: 'center' as const }]}>
+                      <View style={[styles.stockBadgeLarge, { backgroundColor: statusBg }]}>
+                        <Text style={[styles.stockTextLarge, { color: statusColor }]}>
+                          {stockLabel} {hasRecipe ? product.unit : ''}
+                        </Text>
+                      </View>
+                    </View>
+                    {!isMobile && (
+                      <View style={{ flex: 1, alignItems: 'center' as const }}>
+                        <Text style={{ fontSize: 11, color: hasRecipe ? colors.success : colors.textTertiary, fontWeight: '500' as const }}>
+                          {hasRecipe ? 'Definie' : 'Non definie'}
+                        </Text>
+                      </View>
+                    )}
+                    {!isMobile && (
+                      <View style={{ flex: 0.8, alignItems: 'center' as const }}>
+                        <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+                          <Text style={[styles.statusBadgeText, { color: '#FFFFFF' }]}>
+                            {statusLabel}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                    {isMobile && (
+                      <View style={[invStyles.variantStatusBadge, { backgroundColor: statusBg }]}>
+                        <Text style={[invStyles.variantStatusText, { color: statusColor }]}>
+                          {statusLabel}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                </TouchableOpacity>
+                {hasVariants && isExpanded && (
+                  <View style={{ borderBottomWidth: i < filteredTransformed.length - 1 ? 1 : 0, borderBottomColor: colors.borderLight }}>
+                    {pVariants.map((variant, vi) => {
+                      const variantRecipe = getRecipeForProduct(product.id, variant.id);
+                      const variantHasRecipe = variantRecipe && variantRecipe.items.length > 0;
+                      let variantTheoreticalStock: number | null = null;
+                      if (variantHasRecipe) {
+                        let minProducible = Infinity;
+                        for (const rItem of variantRecipe.items) {
+                          const ingredientProduct = allProducts.find(p => p.id === rItem.ingredientProductId);
+                          if (!ingredientProduct) { minProducible = 0; break; }
+                          let availableStock = 0;
+                          if (rItem.ingredientVariantId) {
+                            const vr = allVariants.find(v => v.id === rItem.ingredientVariantId);
+                            availableStock = vr?.stockQuantity ?? 0;
+                          } else {
+                            const pvs = getVariantsForProduct(rItem.ingredientProductId);
+                            if (pvs.length > 0) {
+                              availableStock = pvs.reduce((s, v) => s + v.stockQuantity, 0);
+                            } else {
+                              availableStock = getProductStock(rItem.ingredientProductId);
+                            }
+                          }
+                          if (rItem.quantity > 0) {
+                            minProducible = Math.min(minProducible, Math.floor(availableStock / rItem.quantity));
+                          }
+                        }
+                        variantTheoreticalStock = minProducible === Infinity ? null : minProducible;
+                      }
+                      const vStockLabel = variantTheoreticalStock !== null ? `${variantTheoreticalStock}` : '\u2014';
+                      const vStatusColor = variantTheoreticalStock === null ? colors.textTertiary : variantTheoreticalStock <= 0 ? colors.danger : variantTheoreticalStock <= product.lowStockThreshold ? colors.warning : colors.success;
+                      const vStatusBg = variantTheoreticalStock === null ? colors.surfaceHover : variantTheoreticalStock <= 0 ? colors.dangerLight : variantTheoreticalStock <= product.lowStockThreshold ? colors.warningLight : colors.successLight;
+                      const vStatusLabel = !variantHasRecipe ? 'Sans recette' : variantTheoreticalStock !== null && variantTheoreticalStock <= 0 ? 'Rupture' : variantTheoreticalStock !== null && variantTheoreticalStock <= product.lowStockThreshold ? 'Bas' : variantHasRecipe ? 'OK' : 'Sans recette';
+                      const attrLabel = Object.entries(variant.attributes).map(([k, val]) => `${k}: ${val}`).join(' \u00b7 ');
+                      return (
+                        <View
+                          key={variant.id}
+                          style={[
+                            invStyles.variantSubRow,
+                            { backgroundColor: colors.surfaceHover + '40', borderTopWidth: vi === 0 ? 1 : 0, borderTopColor: colors.borderLight },
+                            vi < pVariants.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight + '80' },
+                          ]}
+                        >
+                          <View style={styles.productRowMain}>
+                            <View style={[styles.productInfo, !isMobile && { flex: 2 }]}>
+                              <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, paddingLeft: 20 }}>
+                                <View style={[invStyles.variantDot, { backgroundColor: vStatusColor }]} />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={[invStyles.variantAttrText, { color: colors.text }]}>{attrLabel}</Text>
+                                  {variant.sku ? <Text style={[styles.productSku, { color: colors.textTertiary, fontSize: 10 }]}>{variant.sku}</Text> : null}
+                                </View>
+                              </View>
+                            </View>
+                            <View style={[!isMobile && { flex: 1, alignItems: 'center' as const }]}>
+                              <View style={[invStyles.variantStockBadge, { backgroundColor: vStatusBg }]}>
+                                <Text style={[invStyles.variantStockText, { color: vStatusColor }]}>
+                                  {vStockLabel} {variantTheoreticalStock !== null ? product.unit : ''}
+                                </Text>
+                              </View>
+                            </View>
+                            {!isMobile && (
+                              <View style={{ flex: 1, alignItems: 'center' as const }}>
+                                <Text style={{ fontSize: 11, color: variantHasRecipe ? colors.success : colors.textTertiary, fontWeight: '500' as const }}>
+                                  {variantHasRecipe ? 'Definie' : 'Non definie'}
+                                </Text>
+                              </View>
+                            )}
+                            {!isMobile && (
+                              <View style={{ flex: 0.8, alignItems: 'center' as const }}>
+                                <View style={[invStyles.variantStatusBadge, { backgroundColor: vStatusBg }]}>
+                                  <Text style={[invStyles.variantStatusText, { color: vStatusColor }]}>
+                                    {vStatusLabel}
+                                  </Text>
+                                </View>
+                              </View>
+                            )}
+                            {isMobile && (
+                              <View style={[invStyles.variantStatusBadge, { backgroundColor: vStatusBg }]}>
+                                <Text style={[invStyles.variantStatusText, { color: vStatusColor }]}>
+                                  {vStatusLabel}
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+        </>
+      )}
+
+      {filtered.length === 0 && filteredTransformed.length === 0 && physicalProducts.length === 0 && (
+        <View style={styles.emptyState}>
+          <View style={[styles.emptyIconCircle, { backgroundColor: colors.surfaceHover }]}>
+            <Package size={32} color={colors.textTertiary} />
+          </View>
+          <Text style={[styles.emptyTitle, { color: colors.textSecondary }]}>Aucun produit en stock</Text>
+          <Text style={[styles.emptySubtitle, { color: colors.textTertiary }]}>Ajoutez des produits dans le catalogue pour gerer votre inventaire</Text>
+        </View>
       )}
 
       <FormModal
@@ -563,6 +810,11 @@ function InventaireSection({ isMobile }: { isMobile: boolean }) {
 }
 
 const invStyles = StyleSheet.create({
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '700' as const,
+    marginBottom: 8,
+  },
   variantSubRow: {
     paddingHorizontal: 16,
     paddingVertical: 8,

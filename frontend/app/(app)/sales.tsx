@@ -172,6 +172,10 @@ export default function SalesScreen() {
     getVariantsForProduct,
     findProductByBarcode,
     company,
+    discountCategories,
+    discountCategoryRates,
+    addDiscountCategory,
+    productAttributes,
   } = useData();
   const { isOnline, cachedProducts, cachedClients, cachedCompany, queueOfflineSale } = useOffline();
 
@@ -187,6 +191,11 @@ export default function SalesScreen() {
   const [digitalSubMethod, setDigitalSubMethod] = useState<DigitalSubMethod>('mobile_wave');
   const [tpeConnecting, setTpeConnecting] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
+  const [selectedDiscount, setSelectedDiscount] = useState<string>('');
+  const [showDiscountPicker, setShowDiscountPicker] = useState(false);
+  const [newDiscountName, setNewDiscountName] = useState('');
+  const [newDiscountRate, setNewDiscountRate] = useState('');
+  const [isClientDiscount, setIsClientDiscount] = useState(false);
   const [showClientPicker, setShowClientPicker] = useState(false);
   const [clientSearch, setClientSearch] = useState('');
 
@@ -266,6 +275,8 @@ export default function SalesScreen() {
   const resetCartState = useCallback(() => {
     setCart([]);
     setSelectedClientId('');
+    setSelectedDiscount('');
+    setIsClientDiscount(false);
     setSelectedCategory('card');
     setDigitalSubMethod('mobile_wave');
     setShowPaymentModal(false);
@@ -322,7 +333,7 @@ export default function SalesScreen() {
   }, [cart, selectedClientId, effectiveClients, effectiveCompany.currency, companyId, mobilePhone, showToast, t]);
 
   const salesProducts = useMemo(() =>
-    effectiveProducts.filter((p) => SALES_ALLOWED_TYPES.includes(p.type)),
+    effectiveProducts.filter((p) => SALES_ALLOWED_TYPES.includes(p.type) && p.isAvailableForSale !== false),
     [effectiveProducts]
   );
 
@@ -382,6 +393,13 @@ export default function SalesScreen() {
     return getVariantsForProduct(variantPickerProductId);
   }, [variantPickerProductId, getVariantsForProduct]);
 
+  const discountRate = useMemo(() => {
+    if (selectedDiscount && discountCategoryRates[selectedDiscount]) {
+      return discountCategoryRates[selectedDiscount];
+    }
+    return 0;
+  }, [selectedDiscount, discountCategoryRates]);
+
   const cartTotals = useMemo(() => {
     let totalHT = 0;
     let totalTVA = 0;
@@ -394,8 +412,14 @@ export default function SalesScreen() {
       totalTVA += lineTVA;
       totalTTC += lineTTC;
     });
-    return { totalHT, totalTVA, totalTTC };
-  }, [cart]);
+    if (discountRate > 0) {
+      const discountMultiplier = 1 - discountRate / 100;
+      totalHT = totalHT * discountMultiplier;
+      totalTVA = totalTVA * discountMultiplier;
+      totalTTC = totalTTC * discountMultiplier;
+    }
+    return { totalHT: Math.round(totalHT * 100) / 100, totalTVA: Math.round(totalTVA * 100) / 100, totalTTC: Math.round(totalTTC * 100) / 100 };
+  }, [cart, discountRate]);
 
   const cartItemCount = useMemo(() => cart.reduce((s, c) => s + c.quantity, 0), [cart]);
 
@@ -456,6 +480,46 @@ export default function SalesScreen() {
       ];
     });
   }, [effectiveProducts]);
+
+  const handleSelectClient = useCallback((clientId: string) => {
+    setSelectedClientId(clientId);
+    setShowClientPicker(false);
+    setClientSearch('');
+    const client = effectiveClients.find(c => c.id === clientId);
+    if (client?.discountCategory) {
+      setSelectedDiscount(client.discountCategory);
+      setIsClientDiscount(true);
+    } else if (client?.discountPercent && client.discountPercent > 0) {
+      setSelectedDiscount('');
+      setIsClientDiscount(false);
+    } else {
+      if (isClientDiscount) {
+        setSelectedDiscount('');
+        setIsClientDiscount(false);
+      }
+    }
+  }, [effectiveClients, isClientDiscount]);
+
+  const handleRemoveClient = useCallback(() => {
+    setSelectedClientId('');
+    if (isClientDiscount) {
+      setSelectedDiscount('');
+      setIsClientDiscount(false);
+    }
+    setShowClientPicker(false);
+    setClientSearch('');
+  }, [isClientDiscount]);
+
+  const handleAddNewDiscount = useCallback(() => {
+    const name = newDiscountName.trim();
+    const rate = parseFloat(newDiscountRate.replace(',', '.'));
+    if (!name || isNaN(rate) || rate <= 0 || rate > 100) return;
+    addDiscountCategory(name, rate);
+    setSelectedDiscount(name);
+    setNewDiscountName('');
+    setNewDiscountRate('');
+    setShowDiscountPicker(false);
+  }, [newDiscountName, newDiscountRate, addDiscountCategory]);
 
   const handleProductTap = useCallback((productId: string) => {
   console.log('Tap sur produit:', productId);
@@ -547,9 +611,10 @@ export default function SalesScreen() {
   }, [sales, company, showToast]);
 
   const finalizeSale = useCallback(() => {
+    const discMul = discountRate > 0 ? (1 - discountRate / 100) : 1;
     const saleItems: SaleItem[] = cart.map((c) => {
-      const lineHT = c.unitPrice * c.quantity;
-      const lineTVA = lineHT * (c.vatRate / 100);
+      const lineHT = Math.round(c.unitPrice * c.quantity * discMul * 100) / 100;
+      const lineTVA = Math.round(lineHT * (c.vatRate / 100) * 100) / 100;
       const lineTTC = lineHT + lineTVA;
       return {
         id: generateItemId(),
@@ -557,12 +622,13 @@ export default function SalesScreen() {
         productId: c.productId,
         productName: c.productName,
         quantity: c.quantity,
-        unitPrice: c.unitPrice,
+        unitPrice: Math.round(c.unitPrice * discMul * 100) / 100,
         vatRate: c.vatRate,
         totalHT: lineHT,
         totalTVA: lineTVA,
         totalTTC: lineTTC,
-      };
+        ...(c.variantId ? { variantId: c.variantId } : {}),
+      } as SaleItem;
     });
     const extra: { mobilePhone?: string; mobileRef?: string; mixedPayments?: MixedPaymentEntry[] } = {};
     if ((selectedPayment === 'mobile_wave' || selectedPayment === 'mobile_om' || selectedPayment === 'twint') && mobilePhone) {
@@ -631,7 +697,7 @@ export default function SalesScreen() {
       showToast('Vente enregistrée hors-ligne, sera synchronisée au retour de la connexion');
       resetCartState();
     }
-  }, [cart, selectedPayment, selectedClientId, createSale, showToast, checkoutAnim, mobilePhone, mobileRef, mixedMethod1, mixedMethod2, mixedAmount1, mixedAmount2, cartTotals.totalTTC, isOnline, queueOfflineSale, effectiveClients, effectiveCompany, resetCartState]);
+  }, [cart, selectedPayment, selectedClientId, createSale, showToast, checkoutAnim, mobilePhone, mobileRef, mixedMethod1, mixedMethod2, mixedAmount1, mixedAmount2, cartTotals.totalTTC, isOnline, queueOfflineSale, effectiveClients, effectiveCompany, resetCartState, discountRate]);
 
   const handleCheckout = useCallback(() => {
     if (cart.length === 0) {
@@ -934,6 +1000,12 @@ export default function SalesScreen() {
             <Text style={{ fontSize: 13, color: colors.textSecondary }}>TVA</Text>
             <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cartTotals.totalTVA, cur)}</Text>
           </View>
+          {discountRate > 0 ? (
+            <View style={s.totalRow}>
+              <Text style={{ fontSize: 13, color: '#059669', fontWeight: '600' as const }}>Remise ({selectedDiscount} -{discountRate}%)</Text>
+              <Text style={{ fontSize: 13, color: '#059669', fontWeight: '600' as const }}>appliquée</Text>
+            </View>
+          ) : null}
           <View style={[s.totalRow, { marginTop: 6, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.borderLight }]}>
             <Text style={{ fontSize: 20, fontWeight: '800' as const, color: colors.text }}>Total</Text>
             <Text style={{ fontSize: 24, fontWeight: '800' as const, color: colors.primary }}>
@@ -1117,7 +1189,7 @@ const renderProductGrid = () => (
                     const isLowStock = isStockableType(product.type) && productStock <= product.lowStockThreshold && productStock > 0;
                     const isOutOfStock = isStockableType(product.type) && productStock <= 0;
                     const variantCount = productVariantsList.length;
-                    const isExpanded = expandedProductId === product.id;
+                    const _listExpanded = expandedProductId === product.id;
                     const hasRealVariants = productVariantsList.length > 0 && Object.keys(productVariantsList[0].attributes).length > 0;
                     
                     return (
@@ -1183,7 +1255,7 @@ const renderProductGrid = () => (
                     const isLowStock = isStockableType(product.type) && productStock <= product.lowStockThreshold && productStock > 0;
                     const isOutOfStock = isStockableType(product.type) && productStock <= 0;
                     const variantCount = productVariantsList.length;
-                    const isExpanded = expandedProductId === product.id;
+                    const tileExpanded = expandedProductId === product.id;
                     const hasRealVariants = productVariantsList.length > 0 && Object.keys(productVariantsList[0].attributes).length > 0;
                     
                 
@@ -1196,9 +1268,9 @@ const renderProductGrid = () => (
                           s.productTile,
                           {
                             backgroundColor: colors.card,
-                            borderColor: isExpanded ? colors.primary : totalInCart > 0 ? colors.primary : colors.cardBorder,
-                            borderWidth: (isExpanded || totalInCart > 0) ? 2 : 1,
-                            width: isExpanded && hasRealVariants
+                            borderColor: tileExpanded ? colors.primary : totalInCart > 0 ? colors.primary : colors.cardBorder,
+                            borderWidth: (tileExpanded || totalInCart > 0) ? 2 : 1,
+                            width: tileExpanded && hasRealVariants
   ? (() => {
       const allVariants = getVariantsForProduct(product.id);
       const maxLength = Math.max(...allVariants.map(v => {
@@ -1240,7 +1312,7 @@ const renderProductGrid = () => (
                               <Text style={s.tileRuptureBadgeText}>RUPTURE</Text>
                             </View>
                           )}
-                          {hasRealVariants && !isOutOfStock && !isExpanded && (
+                          {hasRealVariants && !isOutOfStock && !tileExpanded && (
                             <View style={[s.tileVariantBadge, { backgroundColor: `${colors.primary}22` }]}>
                               <Layers size={9} color={colors.primary} />
                               <Text style={{ fontSize: 9, fontWeight: '700' as const, color: colors.primary }}>{variantCount}</Text>
@@ -1260,10 +1332,15 @@ const renderProductGrid = () => (
                             </View>
                           </View>
                         </TouchableOpacity>
-                        {isExpanded && hasRealVariants && (
+                        {expandedProductId === product.id && hasRealVariants && (
                           <View style={{ borderTopWidth: 1, borderTopColor: colors.borderLight }}>
                             {productVariantsList.map((v) => {
-                              const vLabel = Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(' / ');
+                              const sortedAttrs = Object.entries(v.attributes).sort((a, b) => {
+                                const idxA = productAttributes.findIndex(pa => pa.name === a[0]);
+                                const idxB = productAttributes.findIndex(pa => pa.name === b[0]);
+                                return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+                              });
+                              const vLabel = sortedAttrs.map(([k, val]) => `${k}: ${val}`).join(' / ');
                               const inCart = cart.find((c) => c.variantId === v.id);
                               return (
                                 <TouchableOpacity
@@ -1368,7 +1445,7 @@ const renderProductGrid = () => (
               {selectedClientId ? (
                 <TouchableOpacity
                   style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }]}
-                  onPress={() => { setSelectedClientId(''); setShowClientPicker(false); setClientSearch(''); }}
+                  onPress={handleRemoveClient}
                 >
                   <X size={14} color={colors.danger} />
                   <Text style={{ fontSize: 13, color: colors.danger }}>Retirer le client</Text>
@@ -1379,14 +1456,92 @@ const renderProductGrid = () => (
                   <TouchableOpacity
                     key={client.id}
                     style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }, client.id === selectedClientId && { backgroundColor: colors.primaryLight }]}
-                    onPress={() => { setSelectedClientId(client.id); setShowClientPicker(false); setClientSearch(''); }}
+                    onPress={() => handleSelectClient(client.id)}
                   >
                     <Text style={{ fontSize: 13, color: colors.text }}>
                       {client.companyName || `${client.firstName} ${client.lastName}`}
                     </Text>
+                    {client.discountCategory ? (
+                      <Text style={{ fontSize: 10, color: colors.primary }}>-{discountCategoryRates[client.discountCategory] || 0}%</Text>
+                    ) : null}
                   </TouchableOpacity>
                 ))}
               </ScrollView>
+            </View>
+          )}
+
+          {/* Discount Picker */}
+          <TouchableOpacity
+            style={[s.clientSelector, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
+            onPress={() => !isClientDiscount && setShowDiscountPicker(!showDiscountPicker)}
+            disabled={isClientDiscount}
+          >
+            <Tag size={14} color={colors.textSecondary} />
+            <Text style={[s.clientSelectorText, { color: selectedDiscount ? colors.text : colors.textTertiary }]} numberOfLines={1}>
+              {selectedDiscount
+                ? `${selectedDiscount} (-${discountCategoryRates[selectedDiscount] || 0}%)`
+                : 'Remise (optionnel)'}
+            </Text>
+            {isClientDiscount ? (
+              <Text style={{ fontSize: 9, color: colors.primary, fontWeight: '600' as const }}>CLIENT</Text>
+            ) : selectedDiscount ? (
+              <TouchableOpacity onPress={() => { setSelectedDiscount(''); setShowDiscountPicker(false); }} hitSlop={8}>
+                <X size={14} color={colors.danger} />
+              </TouchableOpacity>
+            ) : (
+              <ChevronDown size={14} color={colors.textTertiary} />
+            )}
+          </TouchableOpacity>
+
+          {showDiscountPicker && !isClientDiscount && (
+            <View style={[s.clientDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              {selectedDiscount ? (
+                <TouchableOpacity
+                  style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }]}
+                  onPress={() => { setSelectedDiscount(''); setShowDiscountPicker(false); }}
+                >
+                  <X size={14} color={colors.danger} />
+                  <Text style={{ fontSize: 13, color: colors.danger }}>Retirer la remise</Text>
+                </TouchableOpacity>
+              ) : null}
+              <ScrollView style={{ maxHeight: 120 }} nestedScrollEnabled>
+                {discountCategories.map((cat) => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }, cat === selectedDiscount && { backgroundColor: colors.primaryLight }]}
+                    onPress={() => { setSelectedDiscount(cat); setShowDiscountPicker(false); }}
+                  >
+                    <Text style={{ fontSize: 13, color: colors.text, flex: 1 }}>{cat}</Text>
+                    <Text style={{ fontSize: 12, color: colors.primary, fontWeight: '600' as const }}>-{discountCategoryRates[cat] || 0}%</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.border, padding: 8, gap: 6 }}>
+                <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.textSecondary }}>Ajouter une remise</Text>
+                <View style={{ flexDirection: 'row' as const, gap: 6 }}>
+                  <TextInput
+                    style={[s.clientDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder, flex: 1 }]}
+                    placeholder="Nom..."
+                    placeholderTextColor={colors.textTertiary}
+                    value={newDiscountName}
+                    onChangeText={setNewDiscountName}
+                  />
+                  <TextInput
+                    style={[s.clientDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder, width: 60 }]}
+                    placeholder="%"
+                    placeholderTextColor={colors.textTertiary}
+                    value={newDiscountRate}
+                    onChangeText={setNewDiscountRate}
+                    keyboardType="decimal-pad"
+                  />
+                  <TouchableOpacity
+                    style={{ backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 10, justifyContent: 'center' as const }}
+                    onPress={handleAddNewDiscount}
+                  >
+                    <Plus size={14} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
           )}
 

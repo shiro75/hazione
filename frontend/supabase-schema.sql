@@ -51,6 +51,7 @@ DROP TABLE IF EXISTS sales CASCADE;
 DROP TABLE IF EXISTS quotes CASCADE;
 DROP TABLE IF EXISTS invoices CASCADE;
 DROP TABLE IF EXISTS products CASCADE;
+DROP TABLE IF EXISTS product_recipes;
 DROP TABLE IF EXISTS suppliers CASCADE;
 DROP TABLE IF EXISTS clients CASCADE;
 DROP TABLE IF EXISTS categories CASCADE;
@@ -528,7 +529,21 @@ CREATE TABLE payment_transactions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 2.25 delivery_notes
+-- 2.25 product_recipes
+CREATE TABLE product_recipes (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  variant_id TEXT REFERENCES product_variants(id) ON DELETE CASCADE,
+  items JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_product_recipes_product ON product_recipes(product_id);
+CREATE INDEX idx_product_recipes_company ON product_recipes(company_id);
+
+-- 2.26 delivery_notes
 CREATE TABLE delivery_notes (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -871,6 +886,7 @@ ALTER TABLE payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_methods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE payment_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE delivery_notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE product_recipes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE licenses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE license_users ENABLE ROW LEVEL SECURITY;
@@ -1028,6 +1044,12 @@ CREATE POLICY "delivery_notes_select" ON delivery_notes FOR SELECT USING (compan
 CREATE POLICY "delivery_notes_insert" ON delivery_notes FOR INSERT WITH CHECK (company_id = auth.uid()::text);
 CREATE POLICY "delivery_notes_update" ON delivery_notes FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
 CREATE POLICY "delivery_notes_delete" ON delivery_notes FOR DELETE USING (company_id = auth.uid()::text);
+
+-- product_recipes
+CREATE POLICY "product_recipes_select" ON product_recipes FOR SELECT USING (company_id = auth.uid()::text);
+CREATE POLICY "product_recipes_insert" ON product_recipes FOR INSERT WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "product_recipes_update" ON product_recipes FOR UPDATE USING (company_id = auth.uid()::text) WITH CHECK (company_id = auth.uid()::text);
+CREATE POLICY "product_recipes_delete" ON product_recipes FOR DELETE USING (company_id = auth.uid()::text);
 
 -- subscriptions
 CREATE POLICY "subscriptions_select" ON subscriptions FOR SELECT USING (auth.uid() = user_id);

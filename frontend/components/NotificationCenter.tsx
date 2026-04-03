@@ -24,7 +24,8 @@ export default function NotificationCenter({ visible, onClose }: NotificationCen
     setTimeout(() => {
       const entityId = notif.id.split('-').slice(1).join('-');
       if (notif.type === 'stock') {
-        router.push('/stock' as any);
+        console.log('Navigation vers:', `/stock?tab=inventaire`);
+        router.push('/stock?tab=inventaire' as any);
       } else if (notif.type === 'invoice') {
         router.push(`/ventes?tab=relances&selectedId=${entityId}` as any);
       } else if (notif.type === 'late_invoice') {

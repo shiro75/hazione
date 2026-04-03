@@ -5,10 +5,11 @@
 import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, TextInput, StyleSheet,
-  ScrollView, Platform, Alert, Modal, Pressable,
+  ScrollView, Platform, Modal, Pressable,
 } from 'react-native';
 import { ChevronDown, ChevronUp, Check, Plus, Search, Pencil, Trash2, X } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
+import { useConfirm } from '@/contexts/ConfirmContext';
 
 interface DropdownPickerProps {
   label: string;
@@ -33,6 +34,7 @@ export default React.memo(function DropdownPicker({
   compact = false,
 }: DropdownPickerProps) {
   const { colors } = useTheme();
+  const { confirm } = useConfirm();
   const [visible, setVisible] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [editingValue, setEditingValue] = useState<string | null>(null);
@@ -112,40 +114,22 @@ export default React.memo(function DropdownPicker({
   const handleDelete = useCallback((itemValue: string) => {
     if (!onDeleteItem) return;
     const warning = getDeleteWarning?.(itemValue);
-    if (warning) {
-      Alert.alert(
-        'Supprimer',
-        warning,
-        [
-          { text: 'Annuler', style: 'cancel' },
-          {
-            text: 'Supprimer', style: 'destructive', onPress: () => {
-              onDeleteItem(itemValue);
-              if (value === itemValue) {
-                onSelect('');
-              }
-            },
+    confirm(
+      'Supprimer',
+      warning || `Supprimer "${itemValue}" ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer', style: 'destructive', onPress: () => {
+            onDeleteItem(itemValue);
+            if (value === itemValue) {
+              onSelect('');
+            }
           },
-        ]
-      );
-    } else {
-      Alert.alert(
-        'Supprimer',
-        `Supprimer "${itemValue}" ?`,
-        [
-          { text: 'Annuler', style: 'cancel' },
-          {
-            text: 'Supprimer', style: 'destructive', onPress: () => {
-              onDeleteItem(itemValue);
-              if (value === itemValue) {
-                onSelect('');
-              }
-            },
-          },
-        ]
-      );
-    }
-  }, [onDeleteItem, getDeleteWarning, value, onSelect]);
+        },
+      ]
+    );
+  }, [onDeleteItem, getDeleteWarning, value, onSelect, confirm]);
 
   const hasActions = !!onRenameItem || !!onDeleteItem;
 
