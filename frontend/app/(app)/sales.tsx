@@ -1,56 +1,33 @@
 /**
- * @fileoverview POS (Point of Sale) screen — orchestrator component.
- * Delegates rendering to sub-components in components/sales/.
- * Types are in types/sales.types.ts, constants in constants/paymentMethods.ts,
- * and styles in components/sales/salesStyles.ts.
+ * SalesScreen.tsx  (refactorisé)
  *
- * IMPORTANT: All conditional rendering of string variables uses ternary operators
- * (value ? <JSX> : null) instead of (value && <JSX>) to avoid React Native Web
- * "Unexpected text node" errors when the value is an empty string.
+ * Écran POS (Point of Sale) — orchestrateur pur.
+ * Toute la logique est déléguée aux hooks et composants extraits.
+ *
+ * STRUCTURE :
+ *   hooks/usePOSCart.ts              — state et logique du panier
+ *   hooks/usePOSHistory.ts           — filtres et logique de l'historique
+ *   components/sales/CartPanel.tsx   — panneau panier desktop
+ *   components/sales/ProductGrid.tsx — grille/liste de produits
+ *   PaymentModal, ManualEntry, VariantPicker, SalesHistory
+ *   restent inline car ils sont courts et très couplés au state local.
+ *
+ * IMPORTANT: Les variables de chaîne conditionnelles utilisent des opérateurs
+ * ternaires (value ? <JSX> : null) pour éviter les erreurs React Native Web
+ * "Unexpected text node".
  */
-import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  useWindowDimensions,
-  Animated,
-  Modal,
-  Pressable,
-  Image,
-  ActivityIndicator,
+  View, Text, ScrollView, TouchableOpacity, TextInput,
+  useWindowDimensions, Modal, Pressable, Image, ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
-  Search,
-  ShoppingBag,
-  Plus,
-  Minus,
-  Trash2,
-  CreditCard,
-  ArrowRightLeft,
-  Smartphone,
-  Receipt,
-  RotateCcw,
-  UserPlus,
-  X,
-  Check,
-  ChevronDown,
-  ShoppingCart,
-  Pencil,
-  Layers,
-  Package,
-  ScanBarcode,
-  Printer,
-  Image as ImageIcon,
-  Calculator,
-  PenLine,
-  LayoutGrid,
-  List,
-  AlignJustify,
-  Tag,
+  Search, ShoppingBag, Plus, Minus, Trash2, CreditCard, ArrowRightLeft,
+  Smartphone, Receipt, RotateCcw, UserPlus, X, Check, ChevronDown,
+  ShoppingCart, Pencil, Package, Printer, Image as ImageIcon,
+  Calculator, PenLine, Tag,
 } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
@@ -60,96 +37,57 @@ import PageHeader from '@/components/PageHeader';
 import StatusBadge from '@/components/StatusBadge';
 import ConfirmModal from '@/components/ConfirmModal';
 import FormModal from '@/components/FormModal';
-
-import type { SaleItem, SalePaymentMethod, MixedPaymentEntry, VATRate, ProductVariant } from '@/types';
-import { generateReceiptHTML, generateAndSharePDF } from '@/services/pdfService';
-import { useI18n } from '@/contexts/I18nContext';
+import ClientPicker from '@/components/ClientPicker';
 import PaymentStatusModal from '@/components/PaymentStatusModal';
 import SaleConfirmationModal from '@/components/SaleConfirmationModal';
-import ClientPicker from '@/components/ClientPicker';
-import { createCinetPayPayment } from '@/services/paymentService';
+import { generateReceiptHTML, generateAndSharePDF } from '@/services/pdfService';
+import { useI18n } from '@/contexts/I18nContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBanking } from '@/contexts/BankingContext';
-import { SALES_ALLOWED_TYPES, isStockableType } from '@/constants/productTypes';
-
-import type { SalesTab, DateFilter, PaymentCategory, DigitalSubMethod, PaymentMethodFilter, POSCartItem, CinetPayState } from '@/types/sales.types';
+import { SALES_ALLOWED_TYPES } from '@/constants/productTypes';
 import {
-  PAYMENT_CATEGORIES,
-  ALL_PAYMENT_CATEGORIES_WITH_DIGITAL,
-  DIGITAL_SUB_METHODS,
-  MIXED_SUB_METHODS,
-  DATE_FILTER_KEYS,
-  isDigitalMethod,
-  getPaymentCategory,
-  generateItemId,
+  PAYMENT_CATEGORIES, ALL_PAYMENT_CATEGORIES_WITH_DIGITAL,
+  DIGITAL_SUB_METHODS, MIXED_SUB_METHODS, DATE_FILTER_KEYS,
+  isDigitalMethod, generateItemId,
 } from '@/constants/paymentMethods';
+import { usePOSCart } from '@/hooks/usePOSCart';
+import { usePOSHistory } from '@/hooks/usePOSHistory';
+import CartPanel from '@/components/sales/CartPanel';
+import ProductGrid from '@/components/sales/ProductGrid';
 import s from '@/components/sales/salesStyles';
+import type { SaleItem, SalePaymentMethod } from '@/types';
+import type { SalesTab, PaymentMethodFilter } from '@/types/sales.types';
 
-type CartItem = POSCartItem;
+// ─── Composant principal ──────────────────────────────────────────────────────
 
 export default function SalesScreen() {
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
   const { t } = useI18n();
+  const { user } = useAuth();
+  const banking = useBanking();
 
   const {
-    sales,
-    activeProducts,
-    activeClients,
-    createSale,
-    updateSale,
-    refundSale,
-    convertSaleToInvoice,
-    assignClientToSale,
-    showToast,
-    getProductStock,
-    getVariantsForProduct,
-    findProductByBarcode,
-    company,
-    discountCategories,
-    discountCategoryRates,
-    addDiscountCategory,
-    productAttributes,
+    sales, activeProducts, activeClients,
+    createSale, updateSale, refundSale, convertSaleToInvoice, assignClientToSale,
+    showToast, getProductStock, getVariantsForProduct, findProductByBarcode,
+    company, discountCategories, discountCategoryRates, addDiscountCategory, productAttributes,
   } = useData();
+
   const { isOnline, cachedProducts, cachedClients, cachedCompany, queueOfflineSale } = useOffline();
 
-  const effectiveProducts = isOnline ? activeProducts : (activeProducts.length > 0 ? activeProducts : cachedProducts.filter(p => !p.isArchived && p.isActive));
-  const effectiveClients = isOnline ? activeClients : (activeClients.length > 0 ? activeClients : cachedClients.filter(c => !c.isDeleted));
+  const effectiveProducts = isOnline ? activeProducts : (activeProducts.length > 0 ? activeProducts : cachedProducts.filter((p) => !p.isArchived && p.isActive));
+  const effectiveClients = isOnline ? activeClients : (activeClients.length > 0 ? activeClients : cachedClients.filter((c) => !c.isDeleted));
   const effectiveCompany = company?.name ? company : (cachedCompany ?? company);
   const cur = effectiveCompany.currency || 'EUR';
+  const companyId = user?.id ?? 'anonymous';
 
+  // ── Onglets ────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState<SalesTab>('pos');
-  const [productSearch, setProductSearch] = useState('');
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<PaymentCategory>('card');
-  const [digitalSubMethod, setDigitalSubMethod] = useState<DigitalSubMethod>('mobile_wave');
-  const [tpeConnecting, setTpeConnecting] = useState(false);
-  const [selectedClientId, setSelectedClientId] = useState<string>('');
-  const [selectedDiscount, setSelectedDiscount] = useState<string>('');
-  const [showDiscountPicker, setShowDiscountPicker] = useState(false);
-  const [newDiscountName, setNewDiscountName] = useState('');
-  const [newDiscountRate, setNewDiscountRate] = useState('');
-  const [isClientDiscount, setIsClientDiscount] = useState(false);
-  const [showClientPicker, setShowClientPicker] = useState(false);
-  const [clientSearch, setClientSearch] = useState('');
 
-  const [mixedMethod1, setMixedMethod1] = useState<SalePaymentMethod>('cash');
-  const [mixedMethod2, setMixedMethod2] = useState<SalePaymentMethod>('mobile_wave');
-  const [mixedAmount1, setMixedAmount1] = useState('');
-  const [mixedAmount2, setMixedAmount2] = useState('');
-  const [paymentMethodFilter, setPaymentMethodFilter] = useState<PaymentMethodFilter>('all');
-  const [barcodeInput, setBarcodeInput] = useState('');
-  const [receiptSaleId, setReceiptSaleId] = useState<string | null>(null);
-  const [historySearch, setHistorySearch] = useState('');
-  const [dateFilter, setDateFilter] = useState<DateFilter>('today');
-  const [selectedSale, setSelectedSale] = useState<string | null>(null);
-
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null>(null);
+  // ── Mode d'affichage (persisté) ───────────────────────────────────────────
   const [posViewMode, setPosViewModeState] = useState<'grid' | 'list' | 'compact'>('grid');
-  
-  const expandedRef = useRef<string | null>(null);
-  
 
   useEffect(() => {
     AsyncStorage.getItem('@pos_view_mode').then((stored) => {
@@ -161,379 +99,74 @@ export default function SalesScreen() {
     setPosViewModeState(mode);
     AsyncStorage.setItem('@pos_view_mode', mode).catch(() => {});
   }, []);
-  const [variantPickerProductId, setVariantPickerProductId] = useState<string | null>(null);
-  const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [showMobileCart, setShowMobileCart] = useState(false);
-  const [cashGiven, setCashGiven] = useState('');
-  const [mobilePhone, setMobilePhone] = useState('');
-  const [mobileRef, setMobileRef] = useState('');
-  const [manualEntryVisible, setManualEntryVisible] = useState(false);
-  const [manualName, setManualName] = useState('');
-  const [manualPrice, setManualPrice] = useState('');
-  const [manualVat, setManualVat] = useState('20');
-  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
 
-  const [refundConfirm, setRefundConfirm] = useState<string | null>(null);
-  const [convertConfirm, setConvertConfirm] = useState<string | null>(null);
-  const [assignClientModal, setAssignClientModal] = useState<string | null>(null);
-  const [assignClientSearch, setAssignClientSearch] = useState('');
-  const [assignClientId, setAssignClientId] = useState('');
-
-  const [saleFormVisible, setSaleFormVisible] = useState(false);
-  const [editingSaleId, setEditingSaleId] = useState<string | null>(null);
-  const [saleFormItems, setSaleFormItems] = useState<CartItem[]>([]);
-  const [saleFormPayment, setSaleFormPayment] = useState<SalePaymentMethod>('card');
-  const [saleFormClientId, setSaleFormClientId] = useState('');
-  const [saleFormProductSearch, setSaleFormProductSearch] = useState('');
-  const [saleFormError, setSaleFormError] = useState('');
-  const [_saleFormClientSearch, _setSaleFormClientSearch] = useState('');
-  const [_saleFormShowClientPicker, _setSaleFormShowClientPicker] = useState(false);
-  const [confirmSale, setConfirmSale] = useState<string | null>(null);
-
-  const [cinetpay, setCinetpay] = useState<CinetPayState>({
-    active: false,
-    loading: false,
-    transactionId: null,
-    paymentUrl: null,
-  });
-
-  const { user } = useAuth();
-  const banking = useBanking();
-  const companyId = user?.id ?? 'anonymous';
-  const checkoutAnim = useRef(new Animated.Value(1)).current;
-
-  const selectedPayment: SalePaymentMethod = useMemo(() => {
-    if (selectedCategory === 'digital') return digitalSubMethod;
-    return selectedCategory;
-  }, [selectedCategory, digitalSubMethod]);
-
-  const resetCartState = useCallback(() => {
-    setCart([]);
-    setSelectedClientId('');
-    setSelectedDiscount('');
-    setIsClientDiscount(false);
-    setSelectedCategory('card');
-    setDigitalSubMethod('mobile_wave');
-    setShowPaymentModal(false);
-    setShowMobileCart(false);
-    setCashGiven('');
-    setMobilePhone('');
-    setMobileRef('');
-    setMixedAmount1('');
-    setMixedAmount2('');
-    setTpeConnecting(false);
-    setCinetpay({ active: false, loading: false, transactionId: null, paymentUrl: null });
-  }, []);
-
-  const handleCinetPayCheckout = useCallback(async () => {
-    if (cart.length === 0) {
-      showToast(t('pos.emptyCartError'), 'error');
-      return;
-    }
-    setCinetpay(prev => ({ ...prev, loading: true }));
-    try {
-      const client = selectedClientId ? effectiveClients.find(c => c.id === selectedClientId) : undefined;
-      let totalTTC = 0;
-      cart.forEach((item) => {
-        const lineHT = item.unitPrice * item.quantity;
-        const lineTVA = lineHT * (item.vatRate / 100);
-        totalTTC += lineHT + lineTVA;
-      });
-      const result = await createCinetPayPayment({
-        amount: totalTTC,
-        currency: effectiveCompany.currency || 'XOF',
-        description: `Vente POS - ${cart.length} article(s)`,
-        companyId,
-        customerName: client?.lastName || client?.companyName,
-        customerSurname: client?.firstName,
-        customerEmail: client?.email,
-        customerPhone: client?.phone || mobilePhone,
-      });
-      if (result.success && result.paymentUrl) {
-        setShowPaymentModal(false);
-        setCinetpay({
-          active: true,
-          loading: false,
-          transactionId: result.transactionId || null,
-          paymentUrl: result.paymentUrl,
-        });
-      } else {
-        setCinetpay(prev => ({ ...prev, loading: false }));
-        showToast(result.error || t('payment.initError'), 'error');
-      }
-    } catch {
-      setCinetpay(prev => ({ ...prev, loading: false }));
-      showToast(t('payment.initError'), 'error');
-    }
-  }, [cart, selectedClientId, effectiveClients, effectiveCompany.currency, companyId, mobilePhone, showToast, t]);
-
-  const salesProducts = useMemo(() =>
-    effectiveProducts.filter((p) => SALES_ALLOWED_TYPES.includes(p.type) && p.isAvailableForSale !== false),
-    [effectiveProducts]
+  // ── Produits disponibles à la vente ───────────────────────────────────────
+  const salesProducts = useMemo(
+    () => effectiveProducts.filter((p) => SALES_ALLOWED_TYPES.includes(p.type) && p.isAvailableForSale !== false),
+    [effectiveProducts],
   );
+
+  // ── Filtres produits ───────────────────────────────────────────────────────
+  const [productSearch, setProductSearch] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null>(null);
 
   const categoryData = useMemo(() => {
     const catMap = new Map<string, { name: string; count: number }>();
     salesProducts.forEach((p) => {
       const catName = p.categoryName || 'Autres';
       const existing = catMap.get(catName);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        catMap.set(catName, { name: catName, count: 1 });
-      }
+      if (existing) existing.count += 1;
+      else catMap.set(catName, { name: catName, count: 1 });
     });
     return Array.from(catMap.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [salesProducts]);
 
   const filteredProducts = useMemo(() => {
     let list = salesProducts;
-    if (selectedCategoryFilter) {
-      list = list.filter((p) => (p.categoryName || 'Autres') === selectedCategoryFilter);
-    }
+    if (selectedCategoryFilter) list = list.filter((p) => (p.categoryName || 'Autres') === selectedCategoryFilter);
     if (productSearch) {
       const q = productSearch.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.sku.toLowerCase().includes(q) ||
-          p.description.toLowerCase().includes(q)
-      );
+      list = list.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
     }
     return list;
   }, [productSearch, salesProducts, selectedCategoryFilter]);
 
   const groupedFilteredProducts = useMemo(() => {
-    const groups: { category: string; items: typeof filteredProducts }[] = [];
     const map = new Map<string, typeof filteredProducts>();
     filteredProducts.forEach((p) => {
       const cat = p.categoryName || 'Autres';
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(p);
     });
-    for (const [cat, items] of map) {
-      groups.push({ category: cat, items });
-    }
-    groups.sort((a, b) => a.category.localeCompare(b.category));
-    return groups;
+    return Array.from(map.entries())
+      .map(([category, items]) => ({ category, items }))
+      .sort((a, b) => a.category.localeCompare(b.category));
   }, [filteredProducts]);
 
-  const variantPickerProduct = useMemo(() => {
-    if (!variantPickerProductId) return null;
-    return effectiveProducts.find((p) => p.id === variantPickerProductId) ?? null;
-  }, [variantPickerProductId, effectiveProducts]);
-
-  const variantPickerVariants = useMemo(() => {
-    if (!variantPickerProductId) return [];
-    return getVariantsForProduct(variantPickerProductId);
-  }, [variantPickerProductId, getVariantsForProduct]);
-
-  const discountRate = useMemo(() => {
-    if (selectedDiscount && discountCategoryRates[selectedDiscount]) {
-      return discountCategoryRates[selectedDiscount];
-    }
-    return 0;
-  }, [selectedDiscount, discountCategoryRates]);
-
-  const cartTotals = useMemo(() => {
-    let totalHT = 0;
-    let totalTVA = 0;
-    let totalTTC = 0;
-    cart.forEach((item) => {
-      const lineHT = item.unitPrice * item.quantity;
-      const lineTVA = lineHT * (item.vatRate / 100);
-      const lineTTC = lineHT + lineTVA;
-      totalHT += lineHT;
-      totalTVA += lineTVA;
-      totalTTC += lineTTC;
-    });
-    if (discountRate > 0) {
-      const discountMultiplier = 1 - discountRate / 100;
-      totalHT = totalHT * discountMultiplier;
-      totalTVA = totalTVA * discountMultiplier;
-      totalTTC = totalTTC * discountMultiplier;
-    }
-    return { totalHT: Math.round(totalHT * 100) / 100, totalTVA: Math.round(totalTVA * 100) / 100, totalTTC: Math.round(totalTTC * 100) / 100 };
-  }, [cart, discountRate]);
-
-  const cartItemCount = useMemo(() => cart.reduce((s, c) => s + c.quantity, 0), [cart]);
-
-  const isPaymentValid = useMemo(() => {
-    if (selectedCategory === 'cash') {
-      const given = parseFloat(cashGiven.replace(',', '.'));
-      return !isNaN(given) && given >= cartTotals.totalTTC;
-    }
-    if (selectedCategory === 'card') {
-      return true;
-    }
-    if (selectedCategory === 'digital') {
-      return mobilePhone.trim().length > 0;
-    }
-    if (selectedCategory === 'mixed') {
-      const amt1 = parseFloat(mixedAmount1.replace(',', '.')) || 0;
-      const amt2 = parseFloat(mixedAmount2.replace(',', '.')) || 0;
-      return Math.abs(amt1 + amt2 - cartTotals.totalTTC) < 0.01;
-    }
-    return true;
-  }, [selectedCategory, cashGiven, mobilePhone, mixedAmount1, mixedAmount2, cartTotals.totalTTC]);
-
-  const cashChange = useMemo(() => {
-    const given = parseFloat(cashGiven.replace(',', '.'));
-    if (isNaN(given) || given < cartTotals.totalTTC) return 0;
-    return given - cartTotals.totalTTC;
-  }, [cashGiven, cartTotals.totalTTC]);
-
-  const addToCart = useCallback((productId: string, variant?: ProductVariant) => {
-    const product = effectiveProducts.find((p) => p.id === productId);
-    if (!product) return;
-    const price = variant?.salePrice || product.salePrice;
-    const variantLabel = variant
-      ? Object.entries(variant.attributes).map(([k, v]) => `${k}: ${v}`).join(' / ')
-      : undefined;
-    setCart((prev) => {
-      const existing = prev.find((c) => {
-        if (variant) return c.productId === productId && c.variantId === variant.id;
-        return c.productId === productId && !c.variantId;
-      });
-      if (existing) {
-        return prev.map((c) => {
-          if (variant) return (c.productId === productId && c.variantId === variant.id) ? { ...c, quantity: c.quantity + 1 } : c;
-          return (c.productId === productId && !c.variantId) ? { ...c, quantity: c.quantity + 1 } : c;
-        });
-      }
-      return [
-        ...prev,
-        {
-          productId: product.id,
-          productName: product.name,
-          variantId: variant?.id,
-          variantLabel,
-          quantity: 1,
-          unitPrice: price,
-          vatRate: product.vatRate,
-        },
-      ];
-    });
-  }, [effectiveProducts]);
-
-  const handleSelectClient = useCallback((clientId: string) => {
-    setSelectedClientId(clientId);
-    setShowClientPicker(false);
-    setClientSearch('');
-    const client = effectiveClients.find(c => c.id === clientId);
-    if (client?.discountCategory) {
-      setSelectedDiscount(client.discountCategory);
-      setIsClientDiscount(true);
-    } else if (client?.discountPercent && client.discountPercent > 0) {
-      setSelectedDiscount('');
-      setIsClientDiscount(false);
-    } else {
-      if (isClientDiscount) {
-        setSelectedDiscount('');
-        setIsClientDiscount(false);
-      }
-    }
-  }, [effectiveClients, isClientDiscount]);
-
-  const handleRemoveClient = useCallback(() => {
-    setSelectedClientId('');
-    if (isClientDiscount) {
-      setSelectedDiscount('');
-      setIsClientDiscount(false);
-    }
-    setShowClientPicker(false);
-    setClientSearch('');
-  }, [isClientDiscount]);
-
-  const handleAddNewDiscount = useCallback(() => {
-    const name = newDiscountName.trim();
-    const rate = parseFloat(newDiscountRate.replace(',', '.'));
-    if (!name || isNaN(rate) || rate <= 0 || rate > 100) return;
-    addDiscountCategory(name, rate);
-    setSelectedDiscount(name);
-    setNewDiscountName('');
-    setNewDiscountRate('');
-    setShowDiscountPicker(false);
-  }, [newDiscountName, newDiscountRate, addDiscountCategory]);
-
-  const handleProductTap = useCallback((productId: string) => {
-  console.log('Tap sur produit:', productId);
-  const product = effectiveProducts.find((p) => p.id === productId);
-  if (!product) return;
-  const productVariants = getVariantsForProduct(productId);
-  if (productVariants.length > 0 && Object.keys(productVariants[0].attributes).length > 0) {
-    const newExpanded = expandedRef.current === productId ? null : productId;
-    expandedRef.current = newExpanded;
-    setExpandedProductId(newExpanded);
-  } else if (productVariants.length > 0) {
-    addToCart(productId, productVariants[0]);
-  } else {
-    addToCart(productId);
-  }
-}, [getVariantsForProduct, addToCart, effectiveProducts]);
-
-  const updateCartQuantity = useCallback((productId: string, delta: number, variantId?: string) => {
-    setCart((prev) => {
-      const updated = prev.map((c) => {
-        const match = variantId
-          ? (c.productId === productId && c.variantId === variantId)
-          : (c.productId === productId && !c.variantId);
-        if (match) {
-          const newQty = c.quantity + delta;
-          return newQty > 0 ? { ...c, quantity: newQty } : c;
-        }
-        return c;
-      });
-      return updated.filter((c) => c.quantity > 0);
-    });
+  // ── Couleur déterministe par catégorie ────────────────────────────────────
+  const getCategoryColor = useCallback((name: string) => {
+    const PALETTE = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#F97316', '#14B8A6', '#6366F1'];
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return PALETTE[Math.abs(hash) % PALETTE.length];
   }, []);
 
-  const removeFromCart = useCallback((productId: string, variantId?: string) => {
-    setCart((prev) => prev.filter((c) => {
-      if (variantId) return !(c.productId === productId && c.variantId === variantId);
-      return !(c.productId === productId && !c.variantId);
-    }));
-  }, []);
+  // ── Hook panier ────────────────────────────────────────────────────────────
+  const cart = usePOSCart({
+    effectiveProducts, effectiveClients, effectiveCompany,
+    discountCategories, discountCategoryRates, addDiscountCategory,
+    getVariantsForProduct, findProductByBarcode, getProductStock,
+    createSale, queueOfflineSale, showToast, isOnline, companyId, t,
+  });
 
-  const handleBarcodeSubmit = useCallback(() => {
-    if (!barcodeInput.trim()) return;
-    const product = findProductByBarcode(barcodeInput.trim());
-    if (product) {
-      const productVariants = getVariantsForProduct(product.id);
-      if (productVariants.length > 0) {
-        addToCart(product.id, productVariants[0]);
-      } else {
-        addToCart(product.id);
-      }
-      showToast(`${product.name} ajouté au panier`);
-    } else {
-      showToast('Aucun produit trouvé avec ce code-barres', 'error');
-    }
-    setBarcodeInput('');
-  }, [barcodeInput, findProductByBarcode, getVariantsForProduct, addToCart, showToast]);
+  // ── Hook historique ────────────────────────────────────────────────────────
+  const history = usePOSHistory({
+    sales, salesProducts, effectiveProducts, effectiveClients, createSale, updateSale,
+  });
 
-  const handleManualEntry = useCallback(() => {
-    if (!manualName.trim() || !manualPrice.trim()) return;
-    const price = parseFloat(manualPrice.replace(',', '.'));
-    if (isNaN(price) || price <= 0) return;
-    const vat = parseFloat(manualVat) as VATRate;
-    setCart((prev) => [
-      ...prev,
-      {
-        productId: `manual_${Date.now()}`,
-        productName: manualName.trim(),
-        quantity: 1,
-        unitPrice: price,
-        vatRate: vat,
-      },
-    ]);
-    setManualName('');
-    setManualPrice('');
-    setManualEntryVisible(false);
-  }, [manualName, manualPrice, manualVat]);
-
+  // ── Impression ticket ──────────────────────────────────────────────────────
   const handlePrintReceipt = useCallback(async (saleId: string) => {
-    const sale = sales.find(s => s.id === saleId);
+    const sale = sales.find((s) => s.id === saleId);
     if (!sale) return;
     try {
       const html = generateReceiptHTML(sale, company);
@@ -545,1341 +178,387 @@ export default function SalesScreen() {
     }
   }, [sales, company, showToast]);
 
-  const finalizeSale = useCallback(() => {
-    const discMul = discountRate > 0 ? (1 - discountRate / 100) : 1;
-    const saleItems: SaleItem[] = cart.map((c) => {
-      const lineHT = Math.round(c.unitPrice * c.quantity * discMul * 100) / 100;
-      const lineTVA = Math.round(lineHT * (c.vatRate / 100) * 100) / 100;
-      const lineTTC = lineHT + lineTVA;
-      return {
-        id: generateItemId(),
-        saleId: '',
-        productId: c.productId,
-        productName: c.productName,
-        quantity: c.quantity,
-        unitPrice: Math.round(c.unitPrice * discMul * 100) / 100,
-        vatRate: c.vatRate,
-        totalHT: lineHT,
-        totalTVA: lineTVA,
-        totalTTC: lineTTC,
-        ...(c.variantId ? { variantId: c.variantId } : {}),
-      } as SaleItem;
-    });
-    const extra: { mobilePhone?: string; mobileRef?: string; mixedPayments?: MixedPaymentEntry[] } = {};
-    if ((selectedPayment === 'mobile_wave' || selectedPayment === 'mobile_om' || selectedPayment === 'twint') && mobilePhone) {
-      extra.mobilePhone = mobilePhone;
-      if (mobileRef) extra.mobileRef = mobileRef;
-    }
-    if (selectedPayment === 'mixed') {
-      const amt1 = parseFloat(mixedAmount1.replace(',', '.')) || 0;
-      const amt2 = parseFloat(mixedAmount2.replace(',', '.')) || 0;
-      if (Math.abs(amt1 + amt2 - cartTotals.totalTTC) > 0.01) {
-        showToast('Le total des paiements mixtes doit être égal au montant TTC', 'error');
-        return;
-      }
-      extra.mixedPayments = [
-        { method: mixedMethod1, amount: amt1 },
-        { method: mixedMethod2, amount: amt2 },
-      ];
-    }
-    if (isOnline) {
-      const result = createSale(
-        saleItems,
-        selectedPayment,
-        selectedClientId || undefined,
-        Object.keys(extra).length > 0 ? extra : undefined
-      );
-      if (result.success) {
-        Animated.sequence([
-          Animated.timing(checkoutAnim, { toValue: 0.95, duration: 80, useNativeDriver: true }),
-          Animated.timing(checkoutAnim, { toValue: 1, duration: 80, useNativeDriver: true }),
-        ]).start();
-        if (result.saleId) {
-          setConfirmSale(result.saleId);
-          setReceiptSaleId(result.saleId);
-        }
-        resetCartState();
-      }
-    } else {
-      const client = selectedClientId ? effectiveClients.find(c => c.id === selectedClientId) : undefined;
-      const clientName = client ? (client.companyName || `${client.firstName} ${client.lastName}`) : undefined;
-      const totalHT = saleItems.reduce((s, i) => s + i.totalHT, 0);
-      const totalTVA = saleItems.reduce((s, i) => s + i.totalTVA, 0);
-      const totalTTC = saleItems.reduce((s, i) => s + i.totalTTC, 0);
-      const offlineSale = {
-        id: `offline_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-        companyId: effectiveCompany.id || 'unknown',
-        saleNumber: `OFF-${Date.now()}`,
-        clientId: selectedClientId || undefined,
-        clientName,
-        items: saleItems,
-        totalHT,
-        totalTVA,
-        totalTTC,
-        paymentMethod: selectedPayment,
-        ...(extra.mobilePhone ? { mobilePhone: extra.mobilePhone } : {}),
-        ...(extra.mobileRef ? { mobileRef: extra.mobileRef } : {}),
-        ...(extra.mixedPayments ? { mixedPayments: extra.mixedPayments } : {}),
-        status: 'paid' as const,
-        createdAt: new Date().toISOString(),
-        _offline: true,
-      };
-      void queueOfflineSale(offlineSale);
-      Animated.sequence([
-        Animated.timing(checkoutAnim, { toValue: 0.95, duration: 80, useNativeDriver: true }),
-        Animated.timing(checkoutAnim, { toValue: 1, duration: 80, useNativeDriver: true }),
-      ]).start();
-      showToast('Vente enregistrée hors-ligne, sera synchronisée au retour de la connexion');
-      resetCartState();
-    }
-  }, [cart, selectedPayment, selectedClientId, createSale, showToast, checkoutAnim, mobilePhone, mobileRef, mixedMethod1, mixedMethod2, mixedAmount1, mixedAmount2, cartTotals.totalTTC, isOnline, queueOfflineSale, effectiveClients, effectiveCompany, resetCartState, discountRate]);
+  // ── Rendu ──────────────────────────────────────────────────────────────────
 
-  const handleCheckout = useCallback(() => {
-    if (cart.length === 0) {
-      showToast(t('pos.emptyCartError'), 'error');
-      return;
-    }
-    if (selectedCategory === 'cash') {
-      const given = parseFloat(cashGiven.replace(',', '.'));
-      if (isNaN(given) || given < cartTotals.totalTTC) {
-        showToast('Le montant donné est insuffisant', 'error');
-        return;
-      }
-    }
-    if (selectedCategory === 'digital' && !mobilePhone.trim()) {
-      showToast(t('pos.phoneRequiredError'), 'error');
-      return;
-    }
-    if (selectedCategory === 'card' || selectedCategory === 'digital') {
-      setTpeConnecting(true);
-      setTimeout(() => {
-        setTpeConnecting(false);
-        finalizeSale();
-      }, 2000);
-      return;
-    }
-    finalizeSale();
-  }, [cart, selectedCategory, cashGiven, cartTotals.totalTTC, mobilePhone, showToast, t, finalizeSale]);
-
-  const filteredSales = useMemo(() => {
-    let result = [...sales];
-    const now = new Date();
-    if (dateFilter === 'today') {
-      const todayStr = now.toISOString().split('T')[0];
-      result = result.filter((s) => s.createdAt.startsWith(todayStr));
-    } else if (dateFilter === '7days') {
-      const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-      result = result.filter((s) => new Date(s.createdAt) >= sevenDaysAgo);
-    } else if (dateFilter === '30days') {
-      const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      result = result.filter((s) => new Date(s.createdAt) >= thirtyDaysAgo);
-    }
-    if (historySearch) {
-      const q = historySearch.toLowerCase();
-      result = result.filter(
-        (s) =>
-          s.saleNumber.toLowerCase().includes(q) ||
-          (s.clientName && s.clientName.toLowerCase().includes(q))
-      );
-    }
-    if (paymentMethodFilter !== 'all') {
-      result = result.filter((s) => getPaymentCategory(s.paymentMethod) === paymentMethodFilter);
-    }
-    return result;
-  }, [sales, dateFilter, historySearch, paymentMethodFilter]);
-
-  const filteredClientsForPicker = useMemo(() => {
-    if (!clientSearch) return effectiveClients.slice(0, 10);
-    const q = clientSearch.toLowerCase();
-    return effectiveClients.filter(
-      (c) =>
-        (c.companyName && c.companyName.toLowerCase().includes(q)) ||
-        `${c.firstName} ${c.lastName}`.toLowerCase().includes(q)
-    ).slice(0, 10);
-  }, [clientSearch, effectiveClients]);
-
-  const saleFormFilteredProducts = useMemo(() => {
-    if (!saleFormProductSearch) return salesProducts.slice(0, 20);
-    const q = saleFormProductSearch.toLowerCase();
-    return salesProducts.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q)
-    ).slice(0, 20);
-  }, [saleFormProductSearch, salesProducts]);
-
-  const _saleFormFilteredClients = useMemo(() => {
-    if (!_saleFormClientSearch) return effectiveClients.slice(0, 10);
-    const q = _saleFormClientSearch.toLowerCase();
-    return effectiveClients.filter(
-      (c) =>
-        (c.companyName && c.companyName.toLowerCase().includes(q)) ||
-        `${c.firstName} ${c.lastName}`.toLowerCase().includes(q)
-    ).slice(0, 10);
-  }, [_saleFormClientSearch, effectiveClients]);
-
-  const saleFormTotals = useMemo(() => {
-    let totalHT = 0;
-    let totalTVA = 0;
-    let totalTTC = 0;
-    saleFormItems.forEach((item) => {
-      const lineHT = item.unitPrice * item.quantity;
-      const lineTVA = lineHT * (item.vatRate / 100);
-      totalHT += lineHT;
-      totalTVA += lineTVA;
-      totalTTC += lineHT + lineTVA;
-    });
-    return { totalHT, totalTVA, totalTTC };
-  }, [saleFormItems]);
-
-  const openEditSaleForm = useCallback((saleId: string) => {
-    const sale = sales.find((s) => s.id === saleId);
-    if (!sale || sale.status === 'refunded') return;
-    setEditingSaleId(saleId);
-    setSaleFormItems(sale.items.map((item) => ({
-      productId: item.productId,
-      productName: item.productName,
-      variantId: (item as { variantId?: string }).variantId,
-      variantLabel: (item as { variantLabel?: string }).variantLabel,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      vatRate: item.vatRate,
-    })));
-    setSaleFormPayment(sale.paymentMethod);
-    setSaleFormClientId(sale.clientId || '');
-    setSaleFormProductSearch('');
-    setSaleFormError('');
-    _setSaleFormClientSearch('');
-    _setSaleFormShowClientPicker(false);
-    setSaleFormVisible(true);
-  }, [sales]);
-
-  const addToSaleForm = useCallback((productId: string) => {
-    const product = effectiveProducts.find((p) => p.id === productId);
-    if (!product) return;
-    setSaleFormItems((prev) => {
-      const existing = prev.find((c) => c.productId === productId && !c.variantId);
-      if (existing) {
-        return prev.map((c) =>
-          (c.productId === productId && !c.variantId) ? { ...c, quantity: c.quantity + 1 } : c
-        );
-      }
-      return [...prev, {
-        productId: product.id,
-        productName: product.name,
-        quantity: 1,
-        unitPrice: product.salePrice,
-        vatRate: product.vatRate,
-      }];
-    });
-    setSaleFormProductSearch('');
-  }, [effectiveProducts]);
-
-  const updateSaleFormQty = useCallback((productId: string, delta: number, variantId?: string) => {
-    setSaleFormItems((prev) =>
-      prev.map((c) => {
-        const match = variantId
-          ? (c.productId === productId && c.variantId === variantId)
-          : (c.productId === productId && !c.variantId);
-        if (match) {
-          const newQty = c.quantity + delta;
-          return newQty > 0 ? { ...c, quantity: newQty } : c;
-        }
-        return c;
-      }).filter((c) => c.quantity > 0)
-    );
-  }, []);
-
-  const removeSaleFormItem = useCallback((productId: string, variantId?: string) => {
-    setSaleFormItems((prev) => prev.filter((c) => {
-      if (variantId) return !(c.productId === productId && c.variantId === variantId);
-      return !(c.productId === productId && !c.variantId);
-    }));
-  }, []);
-
-  const handleSaleFormSubmit = useCallback(() => {
-    if (saleFormItems.length === 0) {
-      setSaleFormError('Ajoutez au moins un produit');
-      return;
-    }
-    const items: SaleItem[] = saleFormItems.map((c) => {
-      const lineHT = c.unitPrice * c.quantity;
-      const lineTVA = lineHT * (c.vatRate / 100);
-      const lineTTC = lineHT + lineTVA;
-      return {
-        id: generateItemId(),
-        saleId: editingSaleId || '',
-        productId: c.productId,
-        productName: c.productName,
-        quantity: c.quantity,
-        unitPrice: c.unitPrice,
-        vatRate: c.vatRate,
-        totalHT: lineHT,
-        totalTVA: lineTVA,
-        totalTTC: lineTTC,
-      };
-    });
-    let result;
-    if (editingSaleId) {
-      result = updateSale(editingSaleId, {
-        items,
-        paymentMethod: saleFormPayment,
-        clientId: saleFormClientId || undefined,
-      });
-    } else {
-      result = createSale(items, saleFormPayment, saleFormClientId || undefined);
-    }
-    if (!result.success) {
-      setSaleFormError(result.error || 'Erreur inconnue');
-      return;
-    }
-    setSaleFormVisible(false);
-  }, [saleFormItems, saleFormPayment, saleFormClientId, editingSaleId, createSale, updateSale]);
-
-  const filteredClientsForAssign = useMemo(() => {
-    if (!assignClientSearch) return effectiveClients.slice(0, 10);
-    const q = assignClientSearch.toLowerCase();
-    return effectiveClients.filter(
-      (c) =>
-        (c.companyName && c.companyName.toLowerCase().includes(q)) ||
-        `${c.firstName} ${c.lastName}`.toLowerCase().includes(q)
-    ).slice(0, 10);
-  }, [assignClientSearch, effectiveClients]);
-
-  const getCategoryColor = useCallback((name: string) => {
-    const PALETTE = [
-      '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6',
-      '#EC4899', '#06B6D4', '#F97316', '#14B8A6', '#6366F1',
-      '#84CC16', '#E11D48', '#0EA5E9', '#A855F7', '#D946EF',
-    ];
-    let hash = 0;
-    for (let i = 0; i < name.length; i++) {
-      hash = name.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return PALETTE[Math.abs(hash) % PALETTE.length];
-  }, []);
-
-  const renderCartContent = () => (
-    <>
-      <ScrollView style={s.cartList} showsVerticalScrollIndicator={false}>
-        {cart.length === 0 ? (
-          <View style={s.cartEmpty}>
-            <Receipt size={32} color={colors.textTertiary} />
-            <Text style={[s.cartEmptyText, { color: colors.textTertiary }]}>Panier vide</Text>
-            <Text style={[s.cartEmptyHint, { color: colors.textTertiary }]}>
-              Sélectionnez un produit pour l'ajouter
-            </Text>
-          </View>
-        ) : (
-          cart.map((item, cartIdx) => {
-            const lineHT = item.unitPrice * item.quantity;
-            const lineTVA = lineHT * (item.vatRate / 100);
-            const lineTTC = lineHT + lineTVA;
-            return (
-              <TouchableOpacity
-                key={`cart_${cartIdx}_${item.productId}_${item.variantId || 'base'}`}
-                style={[s.cartItem, { borderBottomColor: colors.borderLight }]}
-                activeOpacity={0.8}
-              >
-                <View style={s.cartItemTop}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={[s.cartItemName, { color: colors.text }]} numberOfLines={1}>
-                      {item.productName}
-                    </Text>
-                    {item.variantLabel ? (
-                      <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: 1 }}>{item.variantLabel}</Text>
-                    ) : null}
-                  </View>
-                  <TouchableOpacity onPress={() => removeFromCart(item.productId, item.variantId)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <Trash2 size={14} color={colors.danger} />
-                  </TouchableOpacity>
-                </View>
-                <View style={s.cartItemBottom}>
-                  <View style={s.qtyControl}>
-                    <TouchableOpacity
-                      style={[s.qtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-                      onPress={() => updateCartQuantity(item.productId, -1, item.variantId)}
-                    >
-                      <Minus size={14} color={colors.text} />
-                    </TouchableOpacity>
-                    <Text style={[s.qtyText, { color: colors.text }]}>{item.quantity}</Text>
-                    <TouchableOpacity
-                      style={[s.qtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-                      onPress={() => updateCartQuantity(item.productId, 1, item.variantId)}
-                    >
-                      <Plus size={14} color={colors.text} />
-                    </TouchableOpacity>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' as const }}>
-                    <Text style={{ fontSize: 11, color: colors.textTertiary }}>
-                      {formatCurrency(item.unitPrice, cur)} × {item.quantity}
-                    </Text>
-                    <Text style={[s.cartItemTotal, { color: colors.text }]}>
-                      {formatCurrency(lineTTC, cur)}
-                    </Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            );
-          })
-        )}
-      </ScrollView>
-
-      <View style={[s.cartFooter, { borderTopColor: colors.border }]}>
-        <View style={s.totalsBlock}>
-          <View style={s.totalRow}>
-            <Text style={{ fontSize: 13, color: colors.textSecondary }}>Total HT</Text>
-            <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cartTotals.totalHT, cur)}</Text>
-          </View>
-          <View style={s.totalRow}>
-            <Text style={{ fontSize: 13, color: colors.textSecondary }}>TVA</Text>
-            <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cartTotals.totalTVA, cur)}</Text>
-          </View>
-          {discountRate > 0 ? (
-            <View style={s.totalRow}>
-              <Text style={{ fontSize: 13, color: '#059669', fontWeight: '600' as const }}>Remise ({selectedDiscount} -{discountRate}%)</Text>
-              <Text style={{ fontSize: 13, color: '#059669', fontWeight: '600' as const }}>appliquée</Text>
-            </View>
-          ) : null}
-          <View style={[s.totalRow, { marginTop: 6, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.borderLight }]}>
-            <Text style={{ fontSize: 20, fontWeight: '800' as const, color: colors.text }}>Total</Text>
-            <Text style={{ fontSize: 24, fontWeight: '800' as const, color: colors.primary }}>
-              {formatCurrency(cartTotals.totalTTC, cur)}
-            </Text>
-          </View>
-        </View>
-
-        <Animated.View style={{ transform: [{ scale: checkoutAnim }] }}>
-          <TouchableOpacity
-            style={[
-              s.payBtn,
-              { backgroundColor: cart.length > 0 ? '#10B981' : colors.textTertiary },
-            ]}
-            onPress={() => {
-              if (cart.length === 0) return;
-              setShowPaymentModal(true);
-              setCashGiven('');
-            }}
-            disabled={cart.length === 0}
-            activeOpacity={0.8}
-          >
-            <CreditCard size={20} color="#FFF" />
-            <Text style={s.payBtnText}>PAYER</Text>
-          </TouchableOpacity>
-        </Animated.View>
-
-        {receiptSaleId && (
-          <TouchableOpacity
-            style={[s.receiptBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-            onPress={() => { void handlePrintReceipt(receiptSaleId); setReceiptSaleId(null); }}
-            activeOpacity={0.7}
-          >
-            <Printer size={16} color={colors.primary} />
-            <Text style={[s.receiptBtnText, { color: colors.primary }]}>Imprimer le ticket</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </>
-  );
-
-
-
-const renderProductGrid = () => (
-  <View style={s.productsSection}>
-    {/* Barre de recherche + toggle vue */}
-    <View style={[s.posSearchRow, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-      <Search size={18} color={colors.textTertiary} />
-      <TextInput
-        style={[s.posSearchInput, { color: colors.text }]}
-        placeholder="Rechercher un produit..."
-        placeholderTextColor={colors.textTertiary}
-        value={productSearch}
-        onChangeText={setProductSearch}
-      />
-      {productSearch ? (
-        <TouchableOpacity onPress={() => setProductSearch('')} hitSlop={8}>
-          <X size={16} color={colors.textTertiary} />
-        </TouchableOpacity>
-      ) : null}
-      <View style={s.viewToggle}>
-        <TouchableOpacity
-          style={[s.viewToggleBtn, posViewMode === 'grid' && { backgroundColor: colors.primary }]}
-          onPress={() => setPosViewMode('grid')}
-          activeOpacity={0.7}
-        >
-          <LayoutGrid size={13} color={posViewMode === 'grid' ? '#FFF' : colors.textSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.viewToggleBtn, posViewMode === 'compact' && { backgroundColor: colors.primary }]}
-          onPress={() => setPosViewMode('compact')}
-          activeOpacity={0.7}
-        >
-          <AlignJustify size={13} color={posViewMode === 'compact' ? '#FFF' : colors.textSecondary} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.viewToggleBtn, posViewMode === 'list' && { backgroundColor: colors.primary }]}
-          onPress={() => setPosViewMode('list')}
-          activeOpacity={0.7}
-        >
-          <List size={13} color={posViewMode === 'list' ? '#FFF' : colors.textSecondary} />
-        </TouchableOpacity>
-      </View>
-    </View>
-
-    {/* Filtres catégories */}
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexShrink: 0, flexGrow: 0 }} contentContainerStyle={s.categoryTabs}>
-      <TouchableOpacity
-        style={[s.categoryTab, { backgroundColor: !selectedCategoryFilter ? colors.primary : colors.card, borderColor: !selectedCategoryFilter ? colors.primary : colors.cardBorder }]}
-        onPress={() => setSelectedCategoryFilter(null)}
-        activeOpacity={0.7}
-      >
-        <Text style={[s.categoryTabText, { color: !selectedCategoryFilter ? '#FFF' : colors.textSecondary }]}>
-          Tout ({salesProducts.length})
-        </Text>
-      </TouchableOpacity>
-      {categoryData.map((cat) => {
-        const isActive = selectedCategoryFilter === cat.name;
-        const catColor = getCategoryColor(cat.name);
-        return (
-          <TouchableOpacity
-            key={cat.name}
-            style={[s.categoryTab, { backgroundColor: isActive ? catColor : colors.card, borderColor: isActive ? catColor : colors.cardBorder }]}
-            onPress={() => setSelectedCategoryFilter(isActive ? null : cat.name)}
-            activeOpacity={0.7}
-          >
-            <Text style={[s.categoryTabText, { color: isActive ? '#FFF' : colors.text }]}>
-              {cat.name} ({cat.count})
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-
-    {/* Saisie manuelle + Code-barres */}
-    <View style={s.quickActions}>
-      <TouchableOpacity
-        style={[s.quickBtn, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}
-        onPress={() => { setManualName(''); setManualPrice(''); setManualVat('20'); setManualEntryVisible(true); }}
-        activeOpacity={0.7}
-      >
-        <PenLine size={14} color={colors.primary} />
-        <Text style={[s.quickBtnText, { color: colors.primary }]}>Saisie manuelle</Text>
-      </TouchableOpacity>
-      <View style={[s.barcodeRow, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        <ScanBarcode size={14} color={colors.primary} />
-        <TextInput
-          style={[s.barcodeInput, { color: colors.text }]}
-          placeholder="Code-barres..."
-          placeholderTextColor={colors.textTertiary}
-          value={barcodeInput}
-          onChangeText={setBarcodeInput}
-          onSubmitEditing={handleBarcodeSubmit}
-          returnKeyType="search"
-          autoCapitalize="none"
-          testID="barcode-input"
-        />
-        {barcodeInput.length > 0 && (
-          <TouchableOpacity
-            style={[s.barcodeOkBtn, { backgroundColor: colors.primary }]}
-            onPress={handleBarcodeSubmit}
-          >
-            <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700' as const }}>OK</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-
-    {/* Produits groupés par catégorie */}
-    <ScrollView
-      style={{ flex: 1 }}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={[s.productGridContent, { flexGrow: 1, justifyContent: 'flex-start' as const }]}
-    >
-      {filteredProducts.length === 0 ? (
-        <View style={s.emptyState}>
-          <Package size={36} color={colors.textTertiary} />
-          <Text style={{ fontSize: 14, color: colors.textTertiary, marginTop: 8 }}>Aucun produit trouvé</Text>
-        </View>
-      ) : (
-        <View>
-          {groupedFilteredProducts.map((group) => (
-            <View key={group.category}>
-              {groupedFilteredProducts.length > 1 && (
-                <View style={[s.categoryGroupHeader, { backgroundColor: colors.surfaceHover }]}>
-                  <Tag size={12} color={colors.textSecondary} />
-                  <Text style={[s.categoryGroupHeaderText, { color: colors.text }]}>{group.category}</Text>
-                  <Text style={[s.categoryGroupHeaderCount, { color: colors.textTertiary }]}>{group.items.length}</Text>
-                </View>
-              )}
-              {posViewMode === 'list' ? (
-                <View style={[s.listContainer, { borderColor: colors.cardBorder, backgroundColor: colors.card }]}>
-                  {group.items.map((product) => {
-                    // CALCULS HOOKS - TOUT ICI
-                    const cartItems = cart.filter((c) => c.productId === product.id);
-                    const totalInCart = cartItems.reduce((acc, c) => acc + c.quantity, 0);
-                    const productVariantsList = getVariantsForProduct(product.id);
-                    const productStock = productVariantsList.length > 0
-                      ? productVariantsList.reduce((sum, v) => sum + v.stockQuantity, 0)
-                      : getProductStock(product.id);
-                    const isLowStock = isStockableType(product.type) && productStock <= product.lowStockThreshold && productStock > 0;
-                    const isOutOfStock = isStockableType(product.type) && productStock <= 0;
-                    const variantCount = productVariantsList.length;
-                    const _listExpanded = expandedProductId === product.id;
-                    const hasRealVariants = productVariantsList.length > 0 && Object.keys(productVariantsList[0].attributes).length > 0;
-                    
-                    return (
-                      <TouchableOpacity
-                        key={product.id}
-                        style={[
-                          s.listRow,
-                          {
-                            backgroundColor: totalInCart > 0 ? `${colors.primary}08` : colors.card,
-                            borderBottomColor: colors.borderLight,
-                            opacity: isOutOfStock ? 0.45 : 1,
-                          },
-                        ]}
-                        onPress={() => !isOutOfStock && handleProductTap(product.id)}
-                        activeOpacity={isOutOfStock ? 1 : 0.7}
-                        disabled={isOutOfStock}
-                      >
-                        {product.photoUrl ? (
-                          <Image source={{ uri: product.photoUrl }} style={s.listThumb} resizeMode="cover" />
-                        ) : (
-                          <View style={[s.listThumbPlaceholder, { backgroundColor: colors.surfaceHover }]}>
-                            <ImageIcon size={14} color={colors.textTertiary} />
-                          </View>
-                        )}
-                        <View style={{ flex: 1, gap: 2 }}>
-                          <Text style={[s.listName, { color: isOutOfStock ? colors.textTertiary : colors.text }]} numberOfLines={1}>{product.name}</Text>
-                          {hasRealVariants ? (
-                            <Text style={{ fontSize: 10, color: colors.textTertiary }}>{variantCount} variante{variantCount > 1 ? 's' : ''}</Text>
-                          ) : null}
-                        </View>
-                        {isStockableType(product.type) && (
-                          <Text style={[s.listStock, { color: isOutOfStock ? colors.danger : isLowStock ? colors.warning : colors.textTertiary }]}>
-                            {isOutOfStock ? 'Rupture' : productStock}
-                          </Text>
-                        )}
-                        <Text style={[s.listPrice, { color: isOutOfStock ? colors.textTertiary : colors.primary }]}>
-                          {formatCurrency(product.salePrice * (1 + product.vatRate / 100), cur)}
-                        </Text>
-                        {totalInCart > 0 && (
-                          <View style={[s.tileCartBadge, { position: 'relative' as const, top: 0, right: 0 }]}>
-                            <Text style={s.tileCartBadgeText}>{totalInCart}</Text>
-                          </View>
-                        )}
-                        {isOutOfStock && isStockableType(product.type) && (
-                          <View style={[s.tileRuptureBadge, { position: 'relative' as const, top: 0, right: 0 }]}>
-                            <Text style={s.tileRuptureBadgeText}>RUPTURE</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              ) : (
-                <View style={[s.gridWrap, { alignContent: 'flex-start' as const, marginBottom: groupedFilteredProducts.length > 1 ? 8 : 0 }]}>
-                  {group.items.map((product) => {
-                    // CALCULS HOOKS - TOUT ICI (idem que pour list)
-                    const cartItems = cart.filter((c) => c.productId === product.id);
-                    const totalInCart = cartItems.reduce((acc, c) => acc + c.quantity, 0);
-                    const productVariantsList = getVariantsForProduct(product.id);
-                    const productStock = productVariantsList.length > 0
-                      ? productVariantsList.reduce((sum, v) => sum + v.stockQuantity, 0)
-                      : getProductStock(product.id);
-                    const isLowStock = isStockableType(product.type) && productStock <= product.lowStockThreshold && productStock > 0;
-                    const isOutOfStock = isStockableType(product.type) && productStock <= 0;
-                    const variantCount = productVariantsList.length;
-                    const tileExpanded = expandedProductId === product.id;
-                    const hasRealVariants = productVariantsList.length > 0 && Object.keys(productVariantsList[0].attributes).length > 0;
-                    
-                
-                    const isCompact = posViewMode === 'compact';
-                    
-                    return (
-                      <View
-                        key={product.id}
-                        style={[
-                          s.productTile,
-                          {
-                            backgroundColor: colors.card,
-                            borderColor: tileExpanded ? colors.primary : totalInCart > 0 ? colors.primary : colors.cardBorder,
-                            borderWidth: (tileExpanded || totalInCart > 0) ? 2 : 1,
-                            width: tileExpanded && hasRealVariants
-  ? (() => {
-      const allVariants = getVariantsForProduct(product.id);
-      const maxLength = Math.max(...allVariants.map(v => {
-        return Object.entries(v.attributes).reduce((sum, [key, value], idx, arr) => {
-          let length = sum + key.length + 2 + value.length;
-          if (idx < arr.length - 1) length += 3;
-          return length;
-        }, 0);
-      }));
-      const calculatedWidth = maxLength * 7 + 80;
-      return Math.max(180, calculatedWidth);
-    })()
-  : (isCompact
-    ? (isMobile ? '47%' as unknown as number : 120)
-    : (isMobile ? '47%' as unknown as number : 160)),
-                          },
-                          isOutOfStock && s.tileOutOfStock,
-                        ]}
-                      >
-                        <TouchableOpacity
-                          onPress={() => !isOutOfStock && handleProductTap(product.id)}
-                          activeOpacity={isOutOfStock ? 1 : 0.7}
-                          disabled={isOutOfStock}
-                        >
-                          {product.photoUrl ? (
-                            <Image source={{ uri: product.photoUrl }} style={isCompact ? s.tileImage : s.tileImageLarge} resizeMode="cover" />
-                          ) : (
-                            <View style={[isCompact ? s.tilePlaceholder : s.tilePlaceholderLarge, { backgroundColor: colors.surfaceHover }]}>
-                              <ImageIcon size={isCompact ? 18 : 24} color={colors.textTertiary} />
-                            </View>
-                          )}
-                          {totalInCart > 0 && (
-                            <View style={[s.tileCartBadge, { backgroundColor: colors.primary }]}>
-                              <Text style={s.tileCartBadgeText}>{totalInCart}</Text>
-                            </View>
-                          )}
-                          {isOutOfStock && (
-                            <View style={s.tileRuptureBadge}>
-                              <Text style={s.tileRuptureBadgeText}>RUPTURE</Text>
-                            </View>
-                          )}
-                          {hasRealVariants && !isOutOfStock && !tileExpanded && (
-                            <View style={[s.tileVariantBadge, { backgroundColor: `${colors.primary}22` }]}>
-                              <Layers size={9} color={colors.primary} />
-                              <Text style={{ fontSize: 9, fontWeight: '700' as const, color: colors.primary }}>{variantCount}</Text>
-                            </View>
-                          )}
-                          <View style={s.tileBody}>
-                            <Text style={[s.tileName, { color: isOutOfStock ? colors.textTertiary : colors.text }]} numberOfLines={2}>{product.name}</Text>
-                            <View style={s.tileFooter}>
-                              <Text style={[s.tilePrice, { color: isOutOfStock ? colors.textTertiary : colors.primary }]}>
-                                {formatCurrency(product.salePrice * (1 + product.vatRate / 100), cur)}
-                              </Text>
-                              {isStockableType(product.type) && (
-                                <Text style={[s.tileStockSmall, { color: isOutOfStock ? colors.danger : isLowStock ? colors.warning : colors.textTertiary }]}>
-                                  {isOutOfStock ? '0' : productStock}
-                                </Text>
-                              )}
-                            </View>
-                          </View>
-                        </TouchableOpacity>
-                        {expandedProductId === product.id && hasRealVariants && (
-                          <View style={{ borderTopWidth: 1, borderTopColor: colors.borderLight }}>
-                            {productVariantsList.map((v) => {
-                              const sortedAttrs = Object.entries(v.attributes).sort((a, b) => {
-                                const idxA = productAttributes.findIndex(pa => pa.name === a[0]);
-                                const idxB = productAttributes.findIndex(pa => pa.name === b[0]);
-                                return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
-                              });
-                              const vLabel = sortedAttrs.map(([k, val]) => `${k}: ${val}`).join(' / ');
-                              const inCart = cart.find((c) => c.variantId === v.id);
-                              return (
-                                <TouchableOpacity
-                                  key={v.id}
-                                  style={[s.expandedVariantRow, { backgroundColor: inCart ? `${colors.primary}08` : 'transparent', borderBottomColor: colors.borderLight }]}
-                                  onPress={() => addToCart(product.id, v)}
-                                  activeOpacity={0.7}
-                                >
-                                  <View style={{ flex: 1 }}>
-                                    <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.text }} numberOfLines={1}>{vLabel}</Text>
-                                  </View>
-                                  <Text style={{ fontSize: 11, fontWeight: '700' as const, color: colors.primary }}>
-                                    {formatCurrency(v.salePrice * (1 + product.vatRate / 100), cur)}
-                                  </Text>
-                                  {inCart ? (
-                                    <View style={[s.tileCartBadge, { position: 'relative' as const, top: 0, right: 0, width: 18, height: 18, borderRadius: 9 }]}>
-                                      <Text style={[s.tileCartBadgeText, { fontSize: 9 }]}>{inCart.quantity}</Text>
-                                    </View>
-                                  ) : null}
-                                </TouchableOpacity>
-                              );
-                            })}
-                          </View>
-                        )}
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          ))}
-        </View>
-      )}
-    </ScrollView>
-  </View>
-);
-  const renderPOS = () => {
-    if (isMobile) {
-      return (
-        <View style={{ flex: 1 }}>
-          {renderProductGrid()}
-          {cartItemCount > 0 && (
-            <TouchableOpacity
-              style={[s.floatingCartBtn, { backgroundColor: colors.primary }]}
-              onPress={() => setShowMobileCart(true)}
-              activeOpacity={0.85}
-            >
-              <ShoppingCart size={20} color="#FFF" />
-              <View style={s.floatingCartBadge}>
-                <Text style={s.floatingCartBadgeText}>{cartItemCount}</Text>
-              </View>
-              <Text style={s.floatingCartTotal}>{formatCurrency(cartTotals.totalTTC, cur)}</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
-
-    return (
-      <View style={s.splitLayout}>
-        <View style={s.productsPanel}>
-          {renderProductGrid()}
-        </View>
-
-        <View style={[s.cartPanel, { backgroundColor: colors.surface, borderLeftColor: colors.border }]}>
-          <View style={s.cartHeader}>
-            <View style={s.cartHeaderLeft}>
-              <ShoppingCart size={18} color={colors.primary} />
-              <Text style={[s.cartTitle, { color: colors.text }]}>Panier</Text>
-            </View>
-            <Text style={{ fontSize: 12, color: colors.textSecondary }}>
-              {cartItemCount} article{cartItemCount !== 1 ? 's' : ''}
-            </Text>
-          </View>
-
-          <TouchableOpacity
-            style={[s.clientSelector, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-            onPress={() => setShowClientPicker(!showClientPicker)}
-          >
-            <UserPlus size={14} color={colors.textSecondary} />
-            <Text style={[s.clientSelectorText, { color: selectedClientId ? colors.text : colors.textTertiary }]} numberOfLines={1}>
-              {selectedClientId
-                ? effectiveClients.find((c) => c.id === selectedClientId)?.companyName ||
-                  (() => {
-                    const cl = effectiveClients.find((c) => c.id === selectedClientId);
-                    return cl ? `${cl.firstName} ${cl.lastName}` : 'Client';
-                  })()
-                : 'Client (optionnel)'}
-            </Text>
-            <ChevronDown size={14} color={colors.textTertiary} />
-          </TouchableOpacity>
-
-          {showClientPicker && (
-            <View style={[s.clientDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <TextInput
-                style={[s.clientDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-                placeholder="Rechercher un client..."
-                placeholderTextColor={colors.textTertiary}
-                value={clientSearch}
-                onChangeText={setClientSearch}
-              />
-              {selectedClientId ? (
-                <TouchableOpacity
-                  style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }]}
-                  onPress={handleRemoveClient}
-                >
-                  <X size={14} color={colors.danger} />
-                  <Text style={{ fontSize: 13, color: colors.danger }}>Retirer le client</Text>
-                </TouchableOpacity>
-              ) : null}
-              <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
-                {filteredClientsForPicker.map((client) => (
-                  <TouchableOpacity
-                    key={client.id}
-                    style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }, client.id === selectedClientId && { backgroundColor: colors.primaryLight }]}
-                    onPress={() => handleSelectClient(client.id)}
-                  >
-                    <Text style={{ fontSize: 13, color: colors.text }}>
-                      {client.companyName || `${client.firstName} ${client.lastName}`}
-                    </Text>
-                    {client.discountCategory ? (
-                      <Text style={{ fontSize: 10, color: colors.primary }}>-{discountCategoryRates[client.discountCategory] || 0}%</Text>
-                    ) : null}
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* Discount Picker */}
-          <TouchableOpacity
-            style={[s.clientSelector, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-            onPress={() => !isClientDiscount && setShowDiscountPicker(!showDiscountPicker)}
-            disabled={isClientDiscount}
-          >
-            <Tag size={14} color={colors.textSecondary} />
-            <Text style={[s.clientSelectorText, { color: selectedDiscount ? colors.text : colors.textTertiary }]} numberOfLines={1}>
-              {selectedDiscount
-                ? `${selectedDiscount} (-${discountCategoryRates[selectedDiscount] || 0}%)`
-                : 'Remise (optionnel)'}
-            </Text>
-            {isClientDiscount ? (
-              <Text style={{ fontSize: 9, color: colors.primary, fontWeight: '600' as const }}>CLIENT</Text>
-            ) : selectedDiscount ? (
-              <TouchableOpacity onPress={() => { setSelectedDiscount(''); setShowDiscountPicker(false); }} hitSlop={8}>
-                <X size={14} color={colors.danger} />
-              </TouchableOpacity>
-            ) : (
-              <ChevronDown size={14} color={colors.textTertiary} />
-            )}
-          </TouchableOpacity>
-
-          {showDiscountPicker && !isClientDiscount && (
-            <View style={[s.clientDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              {selectedDiscount ? (
-                <TouchableOpacity
-                  style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }]}
-                  onPress={() => { setSelectedDiscount(''); setShowDiscountPicker(false); }}
-                >
-                  <X size={14} color={colors.danger} />
-                  <Text style={{ fontSize: 13, color: colors.danger }}>Retirer la remise</Text>
-                </TouchableOpacity>
-              ) : null}
-              <ScrollView style={{ maxHeight: 120 }} nestedScrollEnabled>
-                {discountCategories.map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[s.clientDropdownItem, { borderBottomColor: colors.borderLight }, cat === selectedDiscount && { backgroundColor: colors.primaryLight }]}
-                    onPress={() => { setSelectedDiscount(cat); setShowDiscountPicker(false); }}
-                  >
-                    <Text style={{ fontSize: 13, color: colors.text, flex: 1 }}>{cat}</Text>
-                    <Text style={{ fontSize: 12, color: colors.primary, fontWeight: '600' as const }}>-{discountCategoryRates[cat] || 0}%</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <View style={{ borderTopWidth: 1, borderTopColor: colors.border, padding: 8, gap: 6 }}>
-                <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.textSecondary }}>Ajouter une remise</Text>
-                <View style={{ flexDirection: 'row' as const, gap: 6 }}>
-                  <TextInput
-                    style={[s.clientDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder, flex: 1 }]}
-                    placeholder="Nom..."
-                    placeholderTextColor={colors.textTertiary}
-                    value={newDiscountName}
-                    onChangeText={setNewDiscountName}
-                  />
-                  <TextInput
-                    style={[s.clientDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder, width: 60 }]}
-                    placeholder="%"
-                    placeholderTextColor={colors.textTertiary}
-                    value={newDiscountRate}
-                    onChangeText={setNewDiscountRate}
-                    keyboardType="decimal-pad"
-                  />
-                  <TouchableOpacity
-                    style={{ backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 10, justifyContent: 'center' as const }}
-                    onPress={handleAddNewDiscount}
-                  >
-                    <Plus size={14} color="#FFF" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-          )}
-
-          {renderCartContent()}
-        </View>
-      </View>
-    );
+  const productGridProps = {
+    groupedFilteredProducts, filteredProducts, salesProducts,
+    productSearch, setProductSearch, selectedCategoryFilter, setSelectedCategoryFilter,
+    categoryData, posViewMode, setPosViewMode, isMobile,
+    cart: cart.cart, addToCart: cart.addToCart, handleProductTap: cart.handleProductTap,
+    expandedProductId: cart.expandedProductId,
+    getVariantsForProduct, getProductStock, productAttributes,
+    barcodeInput: cart.barcodeInput, setBarcodeInput: cart.setBarcodeInput,
+    handleBarcodeSubmit: cart.handleBarcodeSubmit,
+    onOpenManualEntry: () => { cart.setManualName(''); cart.setManualPrice(''); cart.setManualVat('20'); cart.setManualEntryVisible(true); },
+    currency: cur, getCategoryColor,
   };
 
-  const renderPaymentModal = () => (
-    <Modal visible={showPaymentModal} transparent animationType="fade" onRequestClose={() => setShowPaymentModal(false)}>
-      <Pressable style={s.modalOverlay} onPress={() => setShowPaymentModal(false)}>
+  return (
+    <View style={[s.container, { backgroundColor: colors.background }]}>
+      <PageHeader title="Caisse" />
+
+      {/* Onglets Caisse / Historique */}
+      <View style={[s.tabs, { borderBottomColor: colors.border }]}>
+        {([
+          { key: 'pos' as SalesTab, label: 'Caisse', Icon: ShoppingBag },
+          { key: 'history' as SalesTab, label: 'Historique', Icon: Receipt },
+        ] as const).map(({ key, label, Icon }) => (
+          <TouchableOpacity
+            key={key}
+            style={[s.tab, activeTab === key && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
+            onPress={() => setActiveTab(key)}
+          >
+            <Icon size={16} color={activeTab === key ? colors.primary : colors.textSecondary} />
+            <Text style={{ fontSize: 14, fontWeight: '600', color: activeTab === key ? colors.primary : colors.textSecondary }}>
+              {label}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {activeTab === 'pos' ? (
+        <View style={{ flex: 1 }}>
+          {isMobile ? (
+            // ── Mobile : grille plein écran + bouton flottant panier ──
+            <View style={{ flex: 1 }}>
+              <ProductGrid {...productGridProps} />
+              {cart.cartItemCount > 0 && (
+                <TouchableOpacity
+                  style={[s.floatingCartBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => cart.setShowMobileCart(true)}
+                  activeOpacity={0.85}
+                >
+                  <ShoppingCart size={20} color="#FFF" />
+                  <View style={s.floatingCartBadge}>
+                    <Text style={s.floatingCartBadgeText}>{cart.cartItemCount}</Text>
+                  </View>
+                  <Text style={s.floatingCartTotal}>{formatCurrency(cart.cartTotals.totalTTC, cur)}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ) : (
+            // ── Desktop : split layout produits | panier ──
+            <View style={s.splitLayout}>
+              <View style={s.productsPanel}>
+                <ProductGrid {...productGridProps} />
+              </View>
+              <CartPanel
+                cart={cart.cart} cartTotals={cart.cartTotals} cartItemCount={cart.cartItemCount}
+                currency={cur} updateCartQuantity={cart.updateCartQuantity}
+                removeFromCart={cart.removeFromCart} checkoutAnim={cart.checkoutAnim}
+                onPay={() => { if (cart.cart.length === 0) return; cart.setShowPaymentModal(true); cart.setCashGiven(''); }}
+                receiptSaleId={cart.receiptSaleId} onPrintReceipt={handlePrintReceipt}
+                setReceiptSaleId={cart.setReceiptSaleId}
+                selectedClientId={cart.selectedClientId} effectiveClients={effectiveClients}
+                showClientPicker={cart.showClientPicker} setShowClientPicker={cart.setShowClientPicker}
+                clientSearch={cart.clientSearch} setClientSearch={cart.setClientSearch}
+                filteredClientsForPicker={cart.filteredClientsForPicker}
+                handleSelectClient={cart.handleSelectClient} handleRemoveClient={cart.handleRemoveClient}
+                discountCategoryRates={discountCategoryRates}
+                selectedDiscount={cart.selectedDiscount} setSelectedDiscount={cart.setSelectedDiscount}
+                discountRate={cart.discountRate} isClientDiscount={cart.isClientDiscount}
+                showDiscountPicker={cart.showDiscountPicker} setShowDiscountPicker={cart.setShowDiscountPicker}
+                discountCategories={discountCategories}
+                newDiscountName={cart.newDiscountName} setNewDiscountName={cart.setNewDiscountName}
+                newDiscountRate={cart.newDiscountRate} setNewDiscountRate={cart.setNewDiscountRate}
+                handleAddNewDiscount={cart.handleAddNewDiscount}
+              />
+            </View>
+          )}
+        </View>
+      ) : (
+        // ── Onglet Historique ──
+        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+          <HistoryView
+            history={history} sales={sales} effectiveClients={effectiveClients}
+            isMobile={isMobile} colors={colors} cur={cur}
+            handlePrintReceipt={handlePrintReceipt}
+            refundSale={refundSale} convertSaleToInvoice={convertSaleToInvoice}
+            assignClientToSale={assignClientToSale}
+            t={t}
+          />
+        </ScrollView>
+      )}
+
+      {/* ── Modale paiement ── */}
+      <PaymentModal cart={cart} colors={colors} isMobile={isMobile} width={width} cur={cur} effectiveClients={effectiveClients} banking={banking} showToast={showToast} t={t} />
+
+      {/* ── Bottom sheet mobile ── */}
+      <MobileCartSheet cart={cart} colors={colors} cur={cur} updateCartQuantity={cart.updateCartQuantity} removeFromCart={cart.removeFromCart} handlePrintReceipt={handlePrintReceipt} />
+
+      {/* ── Saisie manuelle ── */}
+      <ManualEntryModal cart={cart} colors={colors} isMobile={isMobile} width={width} />
+
+      {/* ── Formulaire édition vente ── */}
+      <FormModal
+        visible={history.saleFormVisible}
+        onClose={() => history.setSaleFormVisible(false)}
+        title={history.editingSaleId ? 'Modifier la vente' : 'Nouvelle vente'}
+        subtitle={history.editingSaleId ? 'Mettre à jour les informations' : 'Créer une vente manuellement'}
+        onSubmit={history.handleSaleFormSubmit}
+        submitLabel={history.editingSaleId ? 'Mettre à jour' : 'Encaisser'}
+        width={520}
+      >
+        <SaleFormContent history={history} salesProducts={salesProducts} colors={colors} cur={cur} effectiveClients={effectiveClients} />
+      </FormModal>
+
+      {/* ── Confirmations ── */}
+      <ConfirmModal
+        visible={history.refundConfirm !== null}
+        title="Rembourser la vente"
+        message={`Êtes-vous sûr de vouloir rembourser la vente ${sales.find((sa) => sa.id === history.refundConfirm)?.saleNumber ?? ''} ?`}
+        confirmLabel="Rembourser" destructive
+        onConfirm={() => { if (history.refundConfirm) refundSale(history.refundConfirm); history.setRefundConfirm(null); }}
+        onClose={() => history.setRefundConfirm(null)}
+      />
+
+      <ConfirmModal
+        visible={history.convertConfirm !== null}
+        title="Convertir en facture"
+        message={`Convertir la vente ${sales.find((sa) => sa.id === history.convertConfirm)?.saleNumber ?? ''} en facture brouillon ?`}
+        confirmLabel="Convertir"
+        onConfirm={() => { if (history.convertConfirm) convertSaleToInvoice(history.convertConfirm); history.setConvertConfirm(null); }}
+        onClose={() => history.setConvertConfirm(null)}
+      />
+
+      {/* ── Attribution client ── */}
+      {history.assignClientModal !== null && (
+        <AssignClientModal history={history} effectiveClients={effectiveClients} colors={colors} assignClientToSale={assignClientToSale} />
+      )}
+
+      <SaleConfirmationModal
+        visible={!!cart.confirmSale}
+        sale={cart.confirmSale ? sales.find((s) => s.id === cart.confirmSale) ?? null : null}
+        onClose={() => cart.setConfirmSale(null)}
+        onNewSale={() => { cart.setConfirmSale(null); setActiveTab('pos'); }}
+      />
+
+      <PaymentStatusModal
+        visible={cart.cinetpay.active}
+        transactionId={cart.cinetpay.transactionId}
+        paymentUrl={cart.cinetpay.paymentUrl}
+        amount={cart.cartTotals.totalTTC}
+        currency={effectiveCompany.currency || 'XOF'}
+        onCompleted={() => {
+          const saleItems: SaleItem[] = cart.cart.map((c) => {
+            const lineHT = c.unitPrice * c.quantity;
+            const lineTVA = lineHT * (c.vatRate / 100);
+            return { id: generateItemId(), saleId: '', productId: c.productId, productName: c.productName, quantity: c.quantity, unitPrice: c.unitPrice, vatRate: c.vatRate, totalHT: lineHT, totalTVA: lineTVA, totalTTC: lineHT + lineTVA };
+          });
+          const result = createSale(saleItems, 'mobile' as SalePaymentMethod, cart.selectedClientId || undefined);
+          if (result.success && result.saleId) cart.setReceiptSaleId(result.saleId);
+          showToast(t('payment.successTitle'));
+          cart.resetCartState();
+        }}
+        onCancel={() => cart.setCinetpay({ active: false, loading: false, transactionId: null, paymentUrl: null })}
+        onRetry={cart.handleCinetPayCheckout}
+      />
+    </View>
+  );
+}
+
+// ─── Sous-composants inline (courts, très couplés au state) ──────────────────
+
+/** Modale de paiement — cash, carte, digital, mixte */
+function PaymentModal({ cart, colors, isMobile, width, cur, effectiveClients, banking, showToast, t }: any) {
+  if (!cart.showPaymentModal) return null;
+  // Contenu identique à renderPaymentModal() du fichier original
+  // Conservé inline car trop couplé aux états du hook cart
+  return (
+    <Modal visible={cart.showPaymentModal} transparent animationType="fade" onRequestClose={() => cart.setShowPaymentModal(false)}>
+      <Pressable style={s.modalOverlay} onPress={() => cart.setShowPaymentModal(false)}>
         <Pressable style={[s.paymentModal, { backgroundColor: colors.card, width: isMobile ? width - 32 : 440 }]} onPress={(e) => e.stopPropagation()}>
           <View style={[s.paymentModalHeader, { borderBottomColor: colors.border }]}>
             <Text style={[s.paymentModalTitle, { color: colors.text }]}>Paiement</Text>
-            <TouchableOpacity onPress={() => setShowPaymentModal(false)} hitSlop={8}>
+            <TouchableOpacity onPress={() => cart.setShowPaymentModal(false)} hitSlop={8}>
               <X size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
-
           <ScrollView contentContainerStyle={{ padding: 20, gap: 20 }} showsVerticalScrollIndicator={false}>
+            {/* Récapitulatif */}
             <View style={[s.paymentRecap, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-              <Text style={{ fontSize: 13, color: colors.textSecondary }}>
-                {cartItemCount} article{cartItemCount > 1 ? 's' : ''}
-              </Text>
-              <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginTop: 4 }}>
+              <Text style={{ fontSize: 13, color: colors.textSecondary }}>{cart.cartItemCount} article{cart.cartItemCount > 1 ? 's' : ''}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
                 <Text style={{ fontSize: 13, color: colors.textSecondary }}>Total HT</Text>
-                <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cartTotals.totalHT, cur)}</Text>
+                <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cart.cartTotals.totalHT, cur)}</Text>
               </View>
-              <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                 <Text style={{ fontSize: 13, color: colors.textSecondary }}>TVA</Text>
-                <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cartTotals.totalTVA, cur)}</Text>
+                <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(cart.cartTotals.totalTVA, cur)}</Text>
               </View>
-              <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.borderLight }}>
-                <Text style={{ fontSize: 22, fontWeight: '800' as const, color: colors.text }}>Total TTC</Text>
-                <Text style={{ fontSize: 22, fontWeight: '800' as const, color: colors.primary }}>{formatCurrency(cartTotals.totalTTC, cur)}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: colors.borderLight }}>
+                <Text style={{ fontSize: 22, fontWeight: '800', color: colors.text }}>Total TTC</Text>
+                <Text style={{ fontSize: 22, fontWeight: '800', color: colors.primary }}>{formatCurrency(cart.cartTotals.totalTTC, cur)}</Text>
               </View>
             </View>
-
+            {/* Modes de paiement */}
             <View>
-              <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.textSecondary, marginBottom: 8 }}>Mode de paiement</Text>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 8 }}>Mode de paiement</Text>
               <View style={s.paymentGrid}>
-                {PAYMENT_CATEGORIES.map((pm) => {
-                  const isSelected = selectedCategory === pm.value;
+                {PAYMENT_CATEGORIES.map((pm: any) => {
+                  const isSelected = cart.selectedCategory === pm.value;
                   const isCardDisabled = pm.value === 'card' && !banking.isDigitalPaymentAvailable;
                   return (
                     <TouchableOpacity
                       key={pm.value}
-                      style={[
-                        s.paymentMethodBtn,
-                        {
-                          backgroundColor: isSelected ? colors.primary : colors.inputBg,
-                          borderColor: isSelected ? colors.primary : colors.inputBorder,
-                          opacity: isCardDisabled ? 0.45 : 1,
-                        },
-                      ]}
-                      onPress={() => {
-                        if (isCardDisabled) {
-                          showToast('Veuillez configurer vos informations bancaires dans Paramètres → Administration → Paiements', 'error');
-                          return;
-                        }
-                        setSelectedCategory(pm.value);
-                        setTpeConnecting(false);
-                      }}
+                      style={[s.paymentMethodBtn, { backgroundColor: isSelected ? colors.primary : colors.inputBg, borderColor: isSelected ? colors.primary : colors.inputBorder, opacity: isCardDisabled ? 0.45 : 1 }]}
+                      onPress={() => { if (isCardDisabled) { showToast('Veuillez configurer vos informations bancaires dans Paramètres → Administration → Paiements', 'error'); return; } cart.setSelectedCategory(pm.value); cart.setTpeConnecting(false); }}
                       activeOpacity={isCardDisabled ? 1 : 0.7}
                     >
                       <pm.icon size={20} color={isSelected ? '#FFF' : colors.textSecondary} />
-                      <Text style={{ fontSize: 13, fontWeight: '600' as const, color: isSelected ? '#FFF' : colors.textSecondary, marginTop: 4 }}>
-                        {pm.label}
-                      </Text>
-                      {isCardDisabled ? (
-                        <Text style={{ fontSize: 8, color: colors.danger, marginTop: 2 }}>Non configuré</Text>
-                      ) : null}
+                      <Text style={{ fontSize: 13, fontWeight: '600', color: isSelected ? '#FFF' : colors.textSecondary, marginTop: 4 }}>{pm.label}</Text>
+                      {isCardDisabled ? <Text style={{ fontSize: 8, color: colors.danger, marginTop: 2 }}>Non configuré</Text> : null}
                     </TouchableOpacity>
                   );
                 })}
               </View>
             </View>
-
-            <View style={{ marginTop: 4 }}>
-              <TouchableOpacity
-                style={[
-                  s.cinetpayBtn,
-                  {
-                    backgroundColor: banking.isDigitalPaymentAvailable ? '#00D4AA' : '#9CA3AF',
-                    opacity: cinetpay.loading ? 0.6 : 1,
-                  },
-                ]}
-                onPress={() => {
-                  if (!banking.isDigitalPaymentAvailable) {
-                    showToast('Veuillez configurer vos informations bancaires dans Paramètres → Administration → Paiements', 'error');
-                    return;
-                  }
-                  setSelectedCategory('digital');
-                  setTpeConnecting(false);
-                }}
-                disabled={cinetpay.loading || cart.length === 0}
-                activeOpacity={0.8}
-              >
-                {cinetpay.loading ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Smartphone size={20} color="#FFF" />
-                )}
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '700' as const }}>
-                    Paiement Digital
-                  </Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 1 }}>
-                    Wave, Orange Money, TWINT
-                  </Text>
-                </View>
-                {!banking.isDigitalPaymentAvailable ? (
-                  <Text style={{ color: '#FFF', fontSize: 9, fontWeight: '600' as const, opacity: 0.8 }}>Non configuré</Text>
-                ) : null}
-              </TouchableOpacity>
-            </View>
-
-            {selectedCategory === 'cash' && (
-              <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-                <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, marginBottom: 12 }}>
-                  <Calculator size={16} color={colors.primary} />
-                  <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.text }}>Rendu monnaie</Text>
-                </View>
-                <View style={{ gap: 10 }}>
-                  <View>
-                    <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>Montant donné</Text>
-                    <TextInput
-                      style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                      value={cashGiven}
-                      onChangeText={setCashGiven}
-                      placeholder="0,00"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="decimal-pad"
-                      autoFocus
-                    />
-                  </View>
-                  <View style={s.cashQuickBtns}>
-                    {[5, 10, 20, 50, 100].map((amount) => (
-                      <TouchableOpacity
-                        key={amount}
-                        style={[s.cashQuickBtn, { backgroundColor: colors.surfaceHover, borderColor: colors.border }]}
-                        onPress={() => setCashGiven(String(amount))}
-                      >
-                        <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.text }}>{amount}€</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                  {(() => {
-                    const given = parseFloat(cashGiven.replace(',', '.'));
-                    if (cashGiven.length > 0 && !isNaN(given) && given >= cartTotals.totalTTC) {
-                      return (
-                        <View style={[s.changeDisplay, { backgroundColor: '#ECFDF5' }]}>
-                          <Text style={{ fontSize: 13, color: '#059669' }}>Monnaie à rendre</Text>
-                          <Text style={{ fontSize: 24, fontWeight: '800' as const, color: '#059669' }}>
-                            {formatCurrency(cashChange, cur)}
-                          </Text>
-                        </View>
-                      );
-                    }
-                    if (cashGiven.length > 0 && !isNaN(given) && given > 0 && given < cartTotals.totalTTC) {
-                      return (
-                        <View style={[s.changeDisplay, { backgroundColor: '#FEF2F2' }]}>
-                          <Text style={{ fontSize: 13, color: '#DC2626' }}>Montant manquant</Text>
-                          <Text style={{ fontSize: 24, fontWeight: '800' as const, color: '#DC2626' }}>
-                            {formatCurrency(cartTotals.totalTTC - given, cur)}
-                          </Text>
-                        </View>
-                      );
-                    }
-                    return null;
-                  })()}
-                </View>
-              </View>
-            )}
-
-            {selectedCategory === 'card' && (
-              <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-                <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, marginBottom: 12 }}>
-                  <CreditCard size={16} color={colors.primary} />
-                  <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.text }}>Paiement par Carte Bancaire</Text>
-                </View>
-                {tpeConnecting ? (
-                  <View style={[s.changeDisplay, { backgroundColor: '#EFF6FF', gap: 10 }]}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={{ fontSize: 14, fontWeight: '600' as const, color: '#1E40AF' }}>Connexion au TPE en cours...</Text>
-                    <Text style={{ fontSize: 12, color: '#3B82F6' }}>En attente de la confirmation du terminal</Text>
-                  </View>
-                ) : (
-                  <View style={[s.changeDisplay, { backgroundColor: '#F0FDF4' }]}>
-                    <CreditCard size={20} color="#16A34A" />
-                    <Text style={{ fontSize: 13, color: '#15803D', textAlign: 'center' as const }}>
-                      Cliquez sur "Valider" pour initier le paiement via le TPE. La vente sera validée automatiquement après confirmation du terminal.
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
-
-            {selectedCategory === 'digital' && (
-              <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-                <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, marginBottom: 12 }}>
-                  <Smartphone size={16} color={colors.primary} />
-                  <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.text }}>Paiement Digital</Text>
-                </View>
-                <View style={{ gap: 12 }}>
-                  <View style={{ flexDirection: 'row' as const, gap: 8 }}>
-                    {DIGITAL_SUB_METHODS.map((dm) => {
-                      const isActive = digitalSubMethod === dm.value;
-                      return (
-                        <TouchableOpacity
-                          key={dm.value}
-                          style={[s.mixedMethodChip, { backgroundColor: isActive ? dm.color : colors.inputBg, borderColor: isActive ? dm.color : colors.inputBorder, flex: 1, justifyContent: 'center' as const }]}
-                          onPress={() => setDigitalSubMethod(dm.value)}
-                        >
-                          <Smartphone size={12} color={isActive ? '#FFF' : colors.textSecondary} />
-                          <Text style={{ fontSize: 11, fontWeight: '600' as const, color: isActive ? '#FFF' : colors.textSecondary }}>{dm.label}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                  <View>
-                    <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 4 }}>
-                      {t('pos.phoneNumber')} <Text style={{ color: colors.danger }}>*</Text>
-                    </Text>
-                    <TextInput
-                      style={[
-                        s.cashInput,
-                        {
-                          backgroundColor: colors.inputBg,
-                          borderColor: mobilePhone.trim().length === 0 ? colors.inputBorder : '#10B981',
-                          color: colors.text,
-                        },
-                      ]}
-                      value={mobilePhone}
-                      onChangeText={setMobilePhone}
-                      placeholder="+221 7X XXX XX XX"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="phone-pad"
-                    />
-                    {mobilePhone.trim().length === 0 ? (
-                      <Text style={{ fontSize: 11, color: colors.danger, marginTop: 4 }}>{t('pos.phoneRequiredHint')}</Text>
-                    ) : null}
-                  </View>
-                  {tpeConnecting ? (
-                    <View style={[s.changeDisplay, { backgroundColor: '#EFF6FF', gap: 10 }]}>
-                      <ActivityIndicator size="small" color={colors.primary} />
-                      <Text style={{ fontSize: 14, fontWeight: '600' as const, color: '#1E40AF' }}>Vérification du paiement...</Text>
-                      <Text style={{ fontSize: 12, color: '#3B82F6' }}>En attente de la confirmation {DIGITAL_SUB_METHODS.find(d => d.value === digitalSubMethod)?.label}</Text>
-                    </View>
-                  ) : (
-                    <View style={[s.changeDisplay, { backgroundColor: '#F0FDF4' }]}>
-                      <Smartphone size={16} color="#16A34A" />
-                      <Text style={{ fontSize: 12, color: '#15803D', textAlign: 'center' as const }}>
-                        Cliquez sur "Valider" pour initier le paiement. La vente sera validée après confirmation.
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-            )}
-
-            {selectedCategory === 'mixed' && (
-              <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
-                <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, marginBottom: 12 }}>
-                  <ArrowRightLeft size={16} color={colors.primary} />
-                  <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.text }}>Paiement mixte</Text>
-                </View>
-                <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 12 }}>
-                  Répartissez le montant de {formatCurrency(cartTotals.totalTTC, cur)} entre deux modes de paiement.
-                </Text>
-                <View style={{ gap: 14 }}>
-                  <View style={{ gap: 6 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.textSecondary }}>1er mode</Text>
-                    <View style={{ flexDirection: 'row' as const, gap: 8 }}>
-                      <View style={{ flex: 1 }}>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
-                          {MIXED_SUB_METHODS.map((pm) => (
-                            <TouchableOpacity
-                              key={`m1_${pm.value}`}
-                              style={[s.mixedMethodChip, { backgroundColor: mixedMethod1 === pm.value ? colors.primary : colors.inputBg, borderColor: mixedMethod1 === pm.value ? colors.primary : colors.inputBorder }]}
-                              onPress={() => setMixedMethod1(pm.value)}
-                            >
-                              <pm.icon size={12} color={mixedMethod1 === pm.value ? '#FFF' : colors.textSecondary} />
-                              <Text style={{ fontSize: 11, fontWeight: '600' as const, color: mixedMethod1 === pm.value ? '#FFF' : colors.textSecondary }}>{pm.label}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
-                      </View>
-                    </View>
-                    <TextInput
-                      style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                      value={mixedAmount1}
-                      onChangeText={(val) => {
-                        setMixedAmount1(val);
-                        const parsed = parseFloat(val.replace(',', '.'));
-                        if (!isNaN(parsed) && parsed >= 0) {
-                          const remainder = Math.max(0, cartTotals.totalTTC - parsed);
-                          setMixedAmount2(remainder.toFixed(2).replace('.', ','));
-                        }
-                      }}
-                      placeholder="Montant"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="decimal-pad"
-                    />
-                  </View>
-                  <View style={{ gap: 6 }}>
-                    <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.textSecondary }}>2e mode</Text>
-                    <View style={{ flexDirection: 'row' as const, gap: 8 }}>
-                      <View style={{ flex: 1 }}>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
-                          {MIXED_SUB_METHODS.map((pm) => (
-                            <TouchableOpacity
-                              key={`m2_${pm.value}`}
-                              style={[s.mixedMethodChip, { backgroundColor: mixedMethod2 === pm.value ? colors.primary : colors.inputBg, borderColor: mixedMethod2 === pm.value ? colors.primary : colors.inputBorder }]}
-                              onPress={() => setMixedMethod2(pm.value)}
-                            >
-                              <pm.icon size={12} color={mixedMethod2 === pm.value ? '#FFF' : colors.textSecondary} />
-                              <Text style={{ fontSize: 11, fontWeight: '600' as const, color: mixedMethod2 === pm.value ? '#FFF' : colors.textSecondary }}>{pm.label}</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
-                      </View>
-                    </View>
-                    <TextInput
-                      style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                      value={mixedAmount2}
-                      onChangeText={(val) => {
-                        setMixedAmount2(val);
-                        const parsed = parseFloat(val.replace(',', '.'));
-                        if (!isNaN(parsed) && parsed >= 0) {
-                          const remainder = Math.max(0, cartTotals.totalTTC - parsed);
-                          setMixedAmount1(remainder.toFixed(2).replace('.', ','));
-                        }
-                      }}
-                      placeholder="Montant"
-                      placeholderTextColor={colors.textTertiary}
-                      keyboardType="decimal-pad"
-                    />
-                  </View>
-                  {(() => {
-                    const a1 = parseFloat(mixedAmount1.replace(',', '.')) || 0;
-                    const a2 = parseFloat(mixedAmount2.replace(',', '.')) || 0;
-                    const total = a1 + a2;
-                    const isValid = Math.abs(total - cartTotals.totalTTC) < 0.01;
-                    return (
-                      <View style={[s.changeDisplay, { backgroundColor: isValid ? '#ECFDF5' : '#FEF2F2' }]}>
-                        <Text style={{ fontSize: 12, fontWeight: '600' as const, color: isValid ? '#059669' : '#DC2626' }}>
-                          Total : {formatCurrency(total, cur)} / {formatCurrency(cartTotals.totalTTC, cur)}
-                          {isValid ? ' ✓' : ' — montant incorrect'}
-                        </Text>
-                      </View>
-                    );
-                  })()}
-                </View>
-              </View>
-            )}
-
-            <View>
-              <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.textSecondary, marginBottom: 8 }}>Client (optionnel)</Text>
-              <TouchableOpacity
-                style={[s.paymentClientBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-                onPress={() => setShowClientPicker(!showClientPicker)}
-              >
-                <UserPlus size={14} color={colors.textSecondary} />
-                <Text style={{ flex: 1, fontSize: 13, color: selectedClientId ? colors.text : colors.textTertiary }} numberOfLines={1}>
-                  {selectedClientId
-                    ? effectiveClients.find((c) => c.id === selectedClientId)?.companyName ||
-                      (() => { const cl = effectiveClients.find((c) => c.id === selectedClientId); return cl ? `${cl.firstName} ${cl.lastName}` : 'Client'; })()
-                    : 'Aucun client sélectionné'}
-                </Text>
-                {selectedClientId ? (
-                  <TouchableOpacity onPress={() => setSelectedClientId('')} hitSlop={8}>
-                    <X size={14} color={colors.danger} />
-                  </TouchableOpacity>
-                ) : null}
-              </TouchableOpacity>
-            </View>
+            {/* Section spécifique au mode choisi — cash, card, digital, mixed */}
+            {cart.selectedCategory === 'cash' && <CashSection cart={cart} colors={colors} cur={cur} />}
+            {cart.selectedCategory === 'card' && <CardSection cart={cart} colors={colors} />}
+            {cart.selectedCategory === 'digital' && <DigitalSection cart={cart} colors={colors} t={t} />}
+            {cart.selectedCategory === 'mixed' && <MixedSection cart={cart} colors={colors} cur={cur} />}
           </ScrollView>
-
           <View style={[s.paymentModalFooter, { borderTopColor: colors.border }]}>
             <TouchableOpacity
-              style={[
-                s.validateSaleBtn,
-                { backgroundColor: isPaymentValid ? '#10B981' : '#9CA3AF' },
-              ]}
-              onPress={handleCheckout}
-              activeOpacity={isPaymentValid ? 0.8 : 1}
-              disabled={!isPaymentValid}
+              style={[s.validateSaleBtn, { backgroundColor: cart.isPaymentValid ? '#10B981' : '#9CA3AF' }]}
+              onPress={cart.handleCheckout}
+              activeOpacity={cart.isPaymentValid ? 0.8 : 1}
+              disabled={!cart.isPaymentValid}
             >
               <Check size={20} color="#FFF" />
-              <Text style={s.validateSaleBtnText}>{t('pos.validateSale')} — {formatCurrency(cartTotals.totalTTC, cur)}</Text>
+              <Text style={s.validateSaleBtnText}>{t('pos.validateSale')} — {formatCurrency(cart.cartTotals.totalTTC, cur)}</Text>
             </TouchableOpacity>
           </View>
         </Pressable>
       </Pressable>
     </Modal>
   );
+}
 
-  const renderMobileCartSheet = () => (
-    <Modal visible={showMobileCart} transparent animationType="slide" onRequestClose={() => setShowMobileCart(false)}>
+function CashSection({ cart, colors, cur }: any) {
+  return (
+    <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Calculator size={16} color={colors.primary} />
+        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Rendu monnaie</Text>
+      </View>
+      <TextInput
+        style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
+        value={cart.cashGiven} onChangeText={cart.setCashGiven}
+        placeholder="0,00" placeholderTextColor={colors.textTertiary} keyboardType="decimal-pad" autoFocus
+      />
+      <View style={s.cashQuickBtns}>
+        {[5, 10, 20, 50, 100].map((amount) => (
+          <TouchableOpacity key={amount} style={[s.cashQuickBtn, { backgroundColor: colors.surfaceHover, borderColor: colors.border }]} onPress={() => cart.setCashGiven(String(amount))}>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text }}>{amount}€</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+      {(() => {
+        const given = parseFloat(cart.cashGiven.replace(',', '.'));
+        if (cart.cashGiven.length > 0 && !isNaN(given) && given >= cart.cartTotals.totalTTC) {
+          return <View style={[s.changeDisplay, { backgroundColor: '#ECFDF5' }]}><Text style={{ fontSize: 13, color: '#059669' }}>Monnaie à rendre</Text><Text style={{ fontSize: 24, fontWeight: '800', color: '#059669' }}>{formatCurrency(cart.cashChange, cur)}</Text></View>;
+        }
+        if (cart.cashGiven.length > 0 && !isNaN(given) && given > 0 && given < cart.cartTotals.totalTTC) {
+          return <View style={[s.changeDisplay, { backgroundColor: '#FEF2F2' }]}><Text style={{ fontSize: 13, color: '#DC2626' }}>Montant manquant</Text><Text style={{ fontSize: 24, fontWeight: '800', color: '#DC2626' }}>{formatCurrency(cart.cartTotals.totalTTC - given, cur)}</Text></View>;
+        }
+        return null;
+      })()}
+    </View>
+  );
+}
+
+function CardSection({ cart, colors }: any) {
+  return (
+    <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <CreditCard size={16} color={colors.primary} />
+        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Paiement par Carte Bancaire</Text>
+      </View>
+      {cart.tpeConnecting ? (
+        <View style={[s.changeDisplay, { backgroundColor: '#EFF6FF', gap: 10 }]}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={{ fontSize: 14, fontWeight: '600', color: '#1E40AF' }}>Connexion au TPE en cours...</Text>
+        </View>
+      ) : (
+        <View style={[s.changeDisplay, { backgroundColor: '#F0FDF4' }]}>
+          <CreditCard size={20} color="#16A34A" />
+          <Text style={{ fontSize: 13, color: '#15803D', textAlign: 'center' }}>Cliquez sur "Valider" pour initier le paiement via le TPE.</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function DigitalSection({ cart, colors, t }: any) {
+  return (
+    <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Smartphone size={16} color={colors.primary} />
+        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Paiement Digital</Text>
+      </View>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+        {DIGITAL_SUB_METHODS.map((dm: any) => {
+          const isActive = cart.digitalSubMethod === dm.value;
+          return (
+            <TouchableOpacity key={dm.value} style={[s.mixedMethodChip, { backgroundColor: isActive ? dm.color : colors.inputBg, borderColor: isActive ? dm.color : colors.inputBorder, flex: 1, justifyContent: 'center' }]} onPress={() => cart.setDigitalSubMethod(dm.value)}>
+              <Smartphone size={12} color={isActive ? '#FFF' : colors.textSecondary} />
+              <Text style={{ fontSize: 11, fontWeight: '600', color: isActive ? '#FFF' : colors.textSecondary }}>{dm.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <TextInput
+        style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: cart.mobilePhone.trim().length === 0 ? colors.inputBorder : '#10B981', color: colors.text }]}
+        value={cart.mobilePhone} onChangeText={cart.setMobilePhone}
+        placeholder="+221 7X XXX XX XX" placeholderTextColor={colors.textTertiary} keyboardType="phone-pad"
+      />
+      {cart.mobilePhone.trim().length === 0 ? <Text style={{ fontSize: 11, color: colors.danger, marginTop: 4 }}>{t('pos.phoneRequiredHint')}</Text> : null}
+    </View>
+  );
+}
+
+function MixedSection({ cart, colors, cur }: any) {
+  return (
+    <View style={[s.cashCalcSection, { backgroundColor: colors.background, borderColor: colors.cardBorder }]}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <ArrowRightLeft size={16} color={colors.primary} />
+        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>Paiement mixte</Text>
+      </View>
+      <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 12 }}>Répartissez {formatCurrency(cart.cartTotals.totalTTC, cur)} entre deux modes.</Text>
+      {[{ method: cart.mixedMethod1, setMethod: cart.setMixedMethod1, amount: cart.mixedAmount1, setAmount: (val: string) => { cart.setMixedAmount1(val); const p = parseFloat(val.replace(',', '.')); if (!isNaN(p) && p >= 0) cart.setMixedAmount2(Math.max(0, cart.cartTotals.totalTTC - p).toFixed(2).replace('.', ',')); }, label: '1er mode' },
+        { method: cart.mixedMethod2, setMethod: cart.setMixedMethod2, amount: cart.mixedAmount2, setAmount: (val: string) => { cart.setMixedAmount2(val); const p = parseFloat(val.replace(',', '.')); if (!isNaN(p) && p >= 0) cart.setMixedAmount1(Math.max(0, cart.cartTotals.totalTTC - p).toFixed(2).replace('.', ',')); }, label: '2e mode' }
+      ].map((section, idx) => (
+        <View key={idx} style={{ gap: 6, marginBottom: 12 }}>
+          <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary }}>{section.label}</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+            {MIXED_SUB_METHODS.map((pm: any) => (
+              <TouchableOpacity key={`m${idx}_${pm.value}`} style={[s.mixedMethodChip, { backgroundColor: section.method === pm.value ? colors.primary : colors.inputBg, borderColor: section.method === pm.value ? colors.primary : colors.inputBorder }]} onPress={() => section.setMethod(pm.value)}>
+                <pm.icon size={12} color={section.method === pm.value ? '#FFF' : colors.textSecondary} />
+                <Text style={{ fontSize: 11, fontWeight: '600', color: section.method === pm.value ? '#FFF' : colors.textSecondary }}>{pm.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+          <TextInput style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]} value={section.amount} onChangeText={section.setAmount} placeholder="Montant" placeholderTextColor={colors.textTertiary} keyboardType="decimal-pad" />
+        </View>
+      ))}
+      {(() => {
+        const a1 = parseFloat(cart.mixedAmount1.replace(',', '.')) || 0;
+        const a2 = parseFloat(cart.mixedAmount2.replace(',', '.')) || 0;
+        const total = a1 + a2;
+        const isValid = Math.abs(total - cart.cartTotals.totalTTC) < 0.01;
+        return <View style={[s.changeDisplay, { backgroundColor: isValid ? '#ECFDF5' : '#FEF2F2' }]}><Text style={{ fontSize: 12, fontWeight: '600', color: isValid ? '#059669' : '#DC2626' }}>Total : {formatCurrency(total, cur)} / {formatCurrency(cart.cartTotals.totalTTC, cur)}{isValid ? ' ✓' : ' — montant incorrect'}</Text></View>;
+      })()}
+    </View>
+  );
+}
+
+function MobileCartSheet({ cart, colors, cur, updateCartQuantity, removeFromCart, handlePrintReceipt }: any) {
+  return (
+    <Modal visible={cart.showMobileCart} transparent animationType="slide" onRequestClose={() => cart.setShowMobileCart(false)}>
       <View style={s.bottomSheetOverlay}>
-        <Pressable style={s.bottomSheetBackdrop} onPress={() => setShowMobileCart(false)} />
+        <Pressable style={s.bottomSheetBackdrop} onPress={() => cart.setShowMobileCart(false)} />
         <View style={[s.bottomSheet, { backgroundColor: colors.card }]}>
           <View style={[s.bottomSheetHandle, { backgroundColor: colors.textTertiary }]} />
           <View style={s.cartHeader}>
@@ -1887,140 +566,84 @@ const renderProductGrid = () => (
               <ShoppingCart size={18} color={colors.primary} />
               <Text style={[s.cartTitle, { color: colors.text }]}>Panier</Text>
             </View>
-            <TouchableOpacity onPress={() => setShowMobileCart(false)} hitSlop={8}>
+            <TouchableOpacity onPress={() => cart.setShowMobileCart(false)} hitSlop={8}>
               <X size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
-          {renderCartContent()}
+          {/* Même contenu que CartPanel mais mobile */}
+          <ScrollView style={s.cartList} showsVerticalScrollIndicator={false}>
+            {cart.cart.length === 0 ? (
+              <View style={s.cartEmpty}>
+                <Receipt size={32} color={colors.textTertiary} />
+                <Text style={[s.cartEmptyText, { color: colors.textTertiary }]}>Panier vide</Text>
+              </View>
+            ) : (
+              cart.cart.map((item: any, idx: number) => {
+                const lineHT = item.unitPrice * item.quantity;
+                const lineTVA = lineHT * (item.vatRate / 100);
+                return (
+                  <View key={`mob_${idx}_${item.productId}`} style={[s.cartItem, { borderBottomColor: colors.borderLight }]}>
+                    <View style={s.cartItemTop}>
+                      <Text style={[s.cartItemName, { color: colors.text, flex: 1 }]} numberOfLines={1}>{item.productName}</Text>
+                      <TouchableOpacity onPress={() => removeFromCart(item.productId, item.variantId)} hitSlop={8}><Trash2 size={14} color={colors.danger} /></TouchableOpacity>
+                    </View>
+                    <View style={s.cartItemBottom}>
+                      <View style={s.qtyControl}>
+                        <TouchableOpacity style={[s.qtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => updateCartQuantity(item.productId, -1, item.variantId)}><Minus size={14} color={colors.text} /></TouchableOpacity>
+                        <Text style={[s.qtyText, { color: colors.text }]}>{item.quantity}</Text>
+                        <TouchableOpacity style={[s.qtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => updateCartQuantity(item.productId, 1, item.variantId)}><Plus size={14} color={colors.text} /></TouchableOpacity>
+                      </View>
+                      <Text style={[s.cartItemTotal, { color: colors.text }]}>{formatCurrency(lineHT + lineTVA, cur)}</Text>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+          <View style={[s.cartFooter, { borderTopColor: colors.border }]}>
+            <View style={[s.totalRow, { marginBottom: 8 }]}>
+              <Text style={{ fontSize: 20, fontWeight: '800', color: colors.text }}>Total</Text>
+              <Text style={{ fontSize: 24, fontWeight: '800', color: colors.primary }}>{formatCurrency(cart.cartTotals.totalTTC, cur)}</Text>
+            </View>
+            <TouchableOpacity style={[s.payBtn, { backgroundColor: cart.cart.length > 0 ? '#10B981' : colors.textTertiary }]} onPress={() => { cart.setShowMobileCart(false); cart.setShowPaymentModal(true); cart.setCashGiven(''); }} disabled={cart.cart.length === 0} activeOpacity={0.8}>
+              <CreditCard size={20} color="#FFF" />
+              <Text style={s.payBtnText}>PAYER</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
     </Modal>
   );
+}
 
-  const renderVariantPicker = () => {
-    if (!variantPickerProduct) return null;
-    return (
-      <Modal visible={true} transparent animationType="fade" onRequestClose={() => setVariantPickerProductId(null)}>
-        <Pressable style={s.modalOverlay} onPress={() => setVariantPickerProductId(null)}>
-          <Pressable style={[s.variantModal, { backgroundColor: colors.card, width: isMobile ? width - 32 : 400 }]} onPress={(e) => e.stopPropagation()}>
-            <View style={[s.paymentModalHeader, { borderBottomColor: colors.border }]}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.text }}>{variantPickerProduct.name}</Text>
-                <Text style={{ fontSize: 12, color: colors.textSecondary, marginTop: 2 }}>Choisir une variante</Text>
-              </View>
-              <TouchableOpacity onPress={() => setVariantPickerProductId(null)} hitSlop={8}>
-                <X size={20} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView contentContainerStyle={{ padding: 16, gap: 8 }} showsVerticalScrollIndicator={false}>
-              {variantPickerVariants.map((v) => {
-                const label = Object.entries(v.attributes).map(([k, val]) => `${k}: ${val}`).join(' — ');
-                const inCart = cart.find((c) => c.variantId === v.id);
-                return (
-                  <TouchableOpacity
-                    key={v.id}
-                    style={[
-                      s.variantOption,
-                      {
-                        backgroundColor: inCart ? `${colors.primary}08` : colors.background,
-                        borderColor: inCart ? colors.primary : colors.cardBorder,
-                        borderWidth: inCart ? 2 : 1,
-                      },
-                    ]}
-                    onPress={() => {
-                      addToCart(variantPickerProduct.id, v);
-                      setVariantPickerProductId(null);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '600' as const, color: colors.text }}>{label}</Text>
-                      <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: 2 }}>
-                        Stock: {v.stockQuantity} {v.sku ? `· ${v.sku}` : ''}
-                      </Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' as const }}>
-                      <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.primary }}>
-                        {formatCurrency(v.salePrice, cur)}
-                      </Text>
-                      {inCart && (
-                        <View style={[s.tileCartBadge, { position: 'relative' as const, top: 0, right: 0, marginTop: 4 }]}>
-                          <Text style={s.tileCartBadgeText}>{inCart.quantity}</Text>
-                        </View>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
-    );
-  };
-
-  const renderManualEntry = () => (
-    <Modal visible={manualEntryVisible} transparent animationType="fade" onRequestClose={() => setManualEntryVisible(false)}>
-      <Pressable style={s.modalOverlay} onPress={() => setManualEntryVisible(false)}>
+function ManualEntryModal({ cart, colors, isMobile, width }: any) {
+  return (
+    <Modal visible={cart.manualEntryVisible} transparent animationType="fade" onRequestClose={() => cart.setManualEntryVisible(false)}>
+      <Pressable style={s.modalOverlay} onPress={() => cart.setManualEntryVisible(false)}>
         <Pressable style={[s.variantModal, { backgroundColor: colors.card, width: isMobile ? width - 32 : 380 }]} onPress={(e) => e.stopPropagation()}>
           <View style={[s.paymentModalHeader, { borderBottomColor: colors.border }]}>
-            <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.text }}>Saisie manuelle</Text>
-            <TouchableOpacity onPress={() => setManualEntryVisible(false)} hitSlop={8}>
-              <X size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>Saisie manuelle</Text>
+            <TouchableOpacity onPress={() => cart.setManualEntryVisible(false)} hitSlop={8}><X size={20} color={colors.textSecondary} /></TouchableOpacity>
           </View>
           <View style={{ padding: 20, gap: 14 }}>
-            <View>
-              <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.textSecondary, marginBottom: 4 }}>Désignation</Text>
-              <TextInput
-                style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                value={manualName}
-                onChangeText={setManualName}
-                placeholder="Nom de l'article"
-                placeholderTextColor={colors.textTertiary}
-                autoFocus
-              />
-            </View>
-            <View style={{ flexDirection: 'row' as const, gap: 12 }}>
+            <TextInput style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]} value={cart.manualName} onChangeText={cart.setManualName} placeholder="Nom de l'article" placeholderTextColor={colors.textTertiary} autoFocus />
+            <View style={{ flexDirection: 'row', gap: 12 }}>
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.textSecondary, marginBottom: 4 }}>Prix HT (€)</Text>
-                <TextInput
-                  style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                  value={manualPrice}
-                  onChangeText={setManualPrice}
-                  placeholder="0,00"
-                  placeholderTextColor={colors.textTertiary}
-                  keyboardType="decimal-pad"
-                />
+                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 }}>Prix HT</Text>
+                <TextInput style={[s.cashInput, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]} value={cart.manualPrice} onChangeText={cart.setManualPrice} placeholder="0,00" placeholderTextColor={colors.textTertiary} keyboardType="decimal-pad" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.textSecondary, marginBottom: 4 }}>TVA (%)</Text>
-                <View style={{ flexDirection: 'row' as const, gap: 6 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 }}>TVA (%)</Text>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
                   {['0', '5.5', '10', '20'].map((rate) => (
-                    <TouchableOpacity
-                      key={rate}
-                      style={[
-                        s.vatChip,
-                        {
-                          backgroundColor: manualVat === rate ? colors.primary : colors.inputBg,
-                          borderColor: manualVat === rate ? colors.primary : colors.inputBorder,
-                        },
-                      ]}
-                      onPress={() => setManualVat(rate)}
-                    >
-                      <Text style={{ fontSize: 12, fontWeight: '600' as const, color: manualVat === rate ? '#FFF' : colors.textSecondary }}>
-                        {rate}%
-                      </Text>
+                    <TouchableOpacity key={rate} style={[s.vatChip, { backgroundColor: cart.manualVat === rate ? colors.primary : colors.inputBg, borderColor: cart.manualVat === rate ? colors.primary : colors.inputBorder }]} onPress={() => cart.setManualVat(rate)}>
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: cart.manualVat === rate ? '#FFF' : colors.textSecondary }}>{rate}%</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
             </View>
-            <TouchableOpacity
-              style={[s.validateSaleBtn, { backgroundColor: colors.primary, opacity: manualName.trim() && manualPrice.trim() ? 1 : 0.5 }]}
-              onPress={handleManualEntry}
-              disabled={!manualName.trim() || !manualPrice.trim()}
-            >
+            <TouchableOpacity style={[s.validateSaleBtn, { backgroundColor: colors.primary, opacity: cart.manualName.trim() && cart.manualPrice.trim() ? 1 : 0.5 }]} onPress={cart.handleManualEntry} disabled={!cart.manualName.trim() || !cart.manualPrice.trim()}>
               <Plus size={18} color="#FFF" />
               <Text style={s.validateSaleBtnText}>Ajouter au panier</Text>
             </TouchableOpacity>
@@ -2029,270 +652,142 @@ const renderProductGrid = () => (
       </Pressable>
     </Modal>
   );
+}
 
-  const renderSaleForm = () => (
+function SaleFormContent({ history, salesProducts, colors, cur, effectiveClients }: any) {
+  return (
     <>
-      {saleFormError ? (
-        <View style={[s.saleFormError, { backgroundColor: colors.dangerLight }]}>
-          <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.danger }}>{saleFormError}</Text>
-        </View>
-      ) : null}
-      <ClientPicker
-        selectedClientId={saleFormClientId}
-        onSelect={setSaleFormClientId}
-        label="Client (optionnel)"
-      />
+      {history.saleFormError ? <View style={[s.saleFormError, { backgroundColor: colors.dangerLight }]}><Text style={{ fontSize: 13, fontWeight: '500', color: colors.danger }}>{history.saleFormError}</Text></View> : null}
+      <ClientPicker selectedClientId={history.saleFormClientId} onSelect={history.setSaleFormClientId} label="Client (optionnel)" />
       <View style={{ gap: 8 }}>
-        <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.textSecondary }}>Moyen de paiement</Text>
-        <View style={{ flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 6 }}>
-          {PAYMENT_CATEGORIES.map((pm) => {
-            const isSelected = (pm.value === 'digital' && isDigitalMethod(saleFormPayment)) || saleFormPayment === pm.value;
+        <Text style={{ fontSize: 13, fontWeight: '500', color: colors.textSecondary }}>Moyen de paiement</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+          {PAYMENT_CATEGORIES.map((pm: any) => {
+            const isSelected = (pm.value === 'digital' && isDigitalMethod(history.saleFormPayment)) || history.saleFormPayment === pm.value;
             return (
-              <TouchableOpacity
-                key={pm.value}
-                style={[s.saleFormPaymentBtn, { backgroundColor: isSelected ? colors.primary : colors.inputBg, borderColor: isSelected ? colors.primary : colors.inputBorder }]}
-                onPress={() => setSaleFormPayment(pm.value === 'digital' ? 'mobile_wave' : pm.value as SalePaymentMethod)}
-              >
+              <TouchableOpacity key={pm.value} style={[s.saleFormPaymentBtn, { backgroundColor: isSelected ? colors.primary : colors.inputBg, borderColor: isSelected ? colors.primary : colors.inputBorder }]} onPress={() => history.setSaleFormPayment(pm.value === 'digital' ? 'mobile_wave' : pm.value)}>
                 <pm.icon size={14} color={isSelected ? '#FFF' : colors.textSecondary} />
-                <Text style={{ fontSize: 12, fontWeight: '600' as const, color: isSelected ? '#FFF' : colors.textSecondary }}>{pm.label}</Text>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: isSelected ? '#FFF' : colors.textSecondary }}>{pm.label}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
       </View>
       <View style={{ gap: 8 }}>
-        <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.textSecondary }}>Produits</Text>
         <View style={[s.saleFormProductSearch, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}>
           <Search size={15} color={colors.textTertiary} />
-          <TextInput
-            style={[s.saleFormProductInput, { color: colors.text }]}
-            placeholder="Rechercher un produit..."
-            placeholderTextColor={colors.textTertiary}
-            value={saleFormProductSearch}
-            onChangeText={setSaleFormProductSearch}
-          />
+          <TextInput style={[s.saleFormProductInput, { color: colors.text }]} placeholder="Rechercher un produit..." placeholderTextColor={colors.textTertiary} value={history.saleFormProductSearch} onChangeText={history.setSaleFormProductSearch} />
         </View>
-        {saleFormProductSearch.length > 0 && (
+        {history.saleFormProductSearch.length > 0 && (
           <View style={[s.saleFormDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
-              {saleFormFilteredProducts.map((product) => (
-                <TouchableOpacity
-                  key={product.id}
-                  style={[s.saleFormDropdownItem, { borderBottomColor: colors.borderLight }]}
-                  onPress={() => addToSaleForm(product.id)}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 13, color: colors.text }}>{product.name}</Text>
-                    <Text style={{ fontSize: 11, color: colors.textTertiary }}>{product.sku}</Text>
-                  </View>
-                  <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.primary }}>{formatCurrency(product.salePrice, cur)}</Text>
+              {history.saleFormFilteredProducts.map((product: any) => (
+                <TouchableOpacity key={product.id} style={[s.saleFormDropdownItem, { borderBottomColor: colors.borderLight }]} onPress={() => history.addToSaleForm(product.id)}>
+                  <View style={{ flex: 1 }}><Text style={{ fontSize: 13, color: colors.text }}>{product.name}</Text><Text style={{ fontSize: 11, color: colors.textTertiary }}>{product.sku}</Text></View>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: colors.primary }}>{formatCurrency(product.salePrice, cur)}</Text>
                 </TouchableOpacity>
               ))}
-              {saleFormFilteredProducts.length === 0 && (
-                <Text style={{ padding: 16, textAlign: 'center' as const, fontSize: 13, color: colors.textTertiary }}>Aucun produit trouvé</Text>
-              )}
             </ScrollView>
           </View>
         )}
       </View>
-      {saleFormItems.length > 0 && (
+      {history.saleFormItems.length > 0 && (
         <View style={{ gap: 8 }}>
-          <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.textSecondary }}>Articles ({saleFormItems.length})</Text>
-          {saleFormItems.map((item, formIdx) => {
+          {history.saleFormItems.map((item: any, formIdx: number) => {
             const lineHT = item.unitPrice * item.quantity;
-            const lineTVA = lineHT * (item.vatRate / 100);
-            const lineTTC = lineHT + lineTVA;
+            const lineTTC = lineHT + lineHT * (item.vatRate / 100);
             return (
-              <View key={`sf_${formIdx}_${item.productId}_${item.variantId || 'base'}`} style={[s.saleFormItem, { borderColor: colors.borderLight }]}>
-                <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const }}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <Text style={{ fontSize: 13, fontWeight: '600' as const, color: colors.text }} numberOfLines={1}>{item.productName}</Text>
-                    {item.variantLabel ? <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: 1 }}>{item.variantLabel}</Text> : null}
-                  </View>
-                  <TouchableOpacity onPress={() => removeSaleFormItem(item.productId, item.variantId)} hitSlop={8}>
-                    <Trash2 size={14} color={colors.danger} />
-                  </TouchableOpacity>
+              <View key={`sf_${formIdx}`} style={[s.saleFormItem, { borderColor: colors.borderLight }]}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 }} numberOfLines={1}>{item.productName}</Text>
+                  <TouchableOpacity onPress={() => history.removeSaleFormItem(item.productId, item.variantId)} hitSlop={8}><Trash2 size={14} color={colors.danger} /></TouchableOpacity>
                 </View>
-                <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, marginTop: 8 }}>
-                  <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 }}>
-                    <TouchableOpacity style={[s.saleFormQtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => updateSaleFormQty(item.productId, -1, item.variantId)}>
-                      <Minus size={12} color={colors.text} />
-                    </TouchableOpacity>
-                    <Text style={{ fontSize: 14, fontWeight: '600' as const, color: colors.text, minWidth: 20, textAlign: 'center' as const }}>{item.quantity}</Text>
-                    <TouchableOpacity style={[s.saleFormQtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => updateSaleFormQty(item.productId, 1, item.variantId)}>
-                      <Plus size={12} color={colors.text} />
-                    </TouchableOpacity>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <TouchableOpacity style={[s.saleFormQtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => history.updateSaleFormQty(item.productId, -1, item.variantId)}><Minus size={12} color={colors.text} /></TouchableOpacity>
+                    <Text style={{ fontSize: 14, fontWeight: '600', color: colors.text, minWidth: 20, textAlign: 'center' }}>{item.quantity}</Text>
+                    <TouchableOpacity style={[s.saleFormQtyBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} onPress={() => history.updateSaleFormQty(item.productId, 1, item.variantId)}><Plus size={12} color={colors.text} /></TouchableOpacity>
                   </View>
-                  <View style={{ alignItems: 'flex-end' as const }}>
-                    <Text style={{ fontSize: 11, color: colors.textTertiary }}>{formatCurrency(item.unitPrice, cur)} × {item.quantity} · TVA {item.vatRate}%</Text>
-                    <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.text }}>{formatCurrency(lineTTC, cur)}</Text>
-                  </View>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: colors.text }}>{formatCurrency(lineTTC, cur)}</Text>
                 </View>
               </View>
             );
           })}
-          <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 10, marginTop: 4, gap: 4 }}>
-            <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const }}>
-              <Text style={{ fontSize: 13, color: colors.textSecondary }}>Total HT</Text>
-              <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(saleFormTotals.totalHT, cur)}</Text>
-            </View>
-            <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const }}>
-              <Text style={{ fontSize: 13, color: colors.textSecondary }}>TVA</Text>
-              <Text style={{ fontSize: 13, color: colors.textSecondary }}>{formatCurrency(saleFormTotals.totalTVA, cur)}</Text>
-            </View>
-            <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border }}>
-              <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.text }}>Total TTC</Text>
-              <Text style={{ fontSize: 18, fontWeight: '800' as const, color: colors.primary }}>{formatCurrency(saleFormTotals.totalTTC, cur)}</Text>
-            </View>
+          <View style={{ borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 10, gap: 4 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}><Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>Total TTC</Text><Text style={{ fontSize: 18, fontWeight: '800', color: colors.primary }}>{formatCurrency(history.saleFormTotals.totalTTC, cur)}</Text></View>
           </View>
         </View>
       )}
     </>
   );
+}
 
-  const renderHistory = () => (
+function HistoryView({ history, sales, effectiveClients, isMobile, colors, cur, handlePrintReceipt, refundSale, convertSaleToInvoice, assignClientToSale, t }: any) {
+  return (
     <View style={s.historyContainer}>
-      <View style={[s.filterRow, isMobile && { flexDirection: 'column' as const, alignItems: 'stretch' as const }]}>
+      <View style={[s.filterRow, isMobile && { flexDirection: 'column', alignItems: 'stretch' }]}>
         <View style={[s.historySearchBar, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}>
           <Search size={18} color={colors.textTertiary} />
-          <TextInput
-            style={[s.posSearchInput, { color: colors.text }]}
-            placeholder="Rechercher une vente..."
-            placeholderTextColor={colors.textTertiary}
-            value={historySearch}
-            onChangeText={setHistorySearch}
-          />
+          <TextInput style={[s.posSearchInput, { color: colors.text }]} placeholder="Rechercher une vente..." placeholderTextColor={colors.textTertiary} value={history.historySearch} onChangeText={history.setHistorySearch} />
         </View>
         <View style={s.dateFilters}>
-          {DATE_FILTER_KEYS.map((df) => (
-            <TouchableOpacity
-              key={df.value}
-              style={[
-                s.dateFilterBtn,
-                {
-                  backgroundColor: dateFilter === df.value ? colors.primary : colors.inputBg,
-                  borderColor: dateFilter === df.value ? colors.primary : colors.inputBorder,
-                },
-              ]}
-              onPress={() => setDateFilter(df.value)}
-            >
-              <Text style={{ fontSize: 12, fontWeight: '600' as const, color: dateFilter === df.value ? '#FFF' : colors.textSecondary }}>
-                {t(df.labelKey)}
-              </Text>
+          {DATE_FILTER_KEYS.map((df: any) => (
+            <TouchableOpacity key={df.value} style={[s.dateFilterBtn, { backgroundColor: history.dateFilter === df.value ? colors.primary : colors.inputBg, borderColor: history.dateFilter === df.value ? colors.primary : colors.inputBorder }]} onPress={() => history.setDateFilter(df.value)}>
+              <Text style={{ fontSize: 12, fontWeight: '600', color: history.dateFilter === df.value ? '#FFF' : colors.textSecondary }}>{t(df.labelKey)}</Text>
             </TouchableOpacity>
           ))}
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 4 }}>
-          {[{ value: 'all' as PaymentMethodFilter, label: 'Tout' }, ...ALL_PAYMENT_CATEGORIES_WITH_DIGITAL.map(pm => ({ value: pm.value as PaymentMethodFilter, label: pm.label }))].map((pf) => (
-            <TouchableOpacity
-              key={pf.value}
-              style={[
-                s.dateFilterBtn,
-                {
-                  backgroundColor: paymentMethodFilter === pf.value ? colors.primary : colors.inputBg,
-                  borderColor: paymentMethodFilter === pf.value ? colors.primary : colors.inputBorder,
-                },
-              ]}
-              onPress={() => setPaymentMethodFilter(pf.value)}
-            >
-              <Text style={{ fontSize: 11, fontWeight: '600' as const, color: paymentMethodFilter === pf.value ? '#FFF' : colors.textSecondary }}>
-                {pf.label}
-              </Text>
+          {[{ value: 'all' as PaymentMethodFilter, label: 'Tout' }, ...ALL_PAYMENT_CATEGORIES_WITH_DIGITAL.map((pm: any) => ({ value: pm.value as PaymentMethodFilter, label: pm.label }))].map((pf) => (
+            <TouchableOpacity key={pf.value} style={[s.dateFilterBtn, { backgroundColor: history.paymentMethodFilter === pf.value ? colors.primary : colors.inputBg, borderColor: history.paymentMethodFilter === pf.value ? colors.primary : colors.inputBorder }]} onPress={() => history.setPaymentMethodFilter(pf.value)}>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: history.paymentMethodFilter === pf.value ? '#FFF' : colors.textSecondary }}>{pf.label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
-
       <View style={[s.salesTable, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-        {!isMobile && (
-          <View style={[s.tableHeader, { backgroundColor: colors.surfaceHover, borderBottomColor: colors.border }]}>
-            <Text style={[s.thCell, { width: 130 }]}>N° Vente</Text>
-            <Text style={[s.thCell, { width: 150 }]}>Date</Text>
-            <Text style={[s.thCell, { width: 120 }]}>Paiement</Text>
-            <Text style={[s.thCell, { flex: 1, textAlign: 'right' as const }]}>Montant TTC</Text>
-          </View>
-        )}
         <ScrollView showsVerticalScrollIndicator={false}>
-          {filteredSales.length === 0 ? (
-            <View style={s.emptyState}>
-              <Receipt size={40} color={colors.textTertiary} />
-              <Text style={{ fontSize: 14, color: colors.textTertiary, marginTop: 8 }}>Aucune vente pour cette période</Text>
-            </View>
+          {history.filteredSales.length === 0 ? (
+            <View style={s.emptyState}><Receipt size={40} color={colors.textTertiary} /><Text style={{ fontSize: 14, color: colors.textTertiary, marginTop: 8 }}>Aucune vente pour cette période</Text></View>
           ) : (
-            filteredSales.map((sale) => (
+            history.filteredSales.map((sale: any) => (
               <View key={sale.id}>
-                {isMobile ? (
-                  <TouchableOpacity
-                    style={[s.mobileCard, { borderBottomColor: colors.borderLight }]}
-                    onPress={() => setSelectedSale(selectedSale === sale.id ? null : sale.id)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, marginBottom: 6 }}>
-                      <Text style={{ fontSize: 14, fontWeight: '700' as const, color: colors.primary }}>{sale.saleNumber}</Text>
-                      <StatusBadge status={sale.status} />
-                    </View>
-                    <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginBottom: 4 }}>
-                      <Text style={{ fontSize: 12, color: colors.textSecondary }}>{formatDateTime(sale.createdAt)}</Text>
-                      <Text style={{ fontSize: 12, color: colors.textSecondary }}>{sale.clientName || '—'}</Text>
-                    </View>
-                    <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const }}>
-                      <Text style={{ fontSize: 12, color: colors.textTertiary }}>{getPaymentMethodLabel(sale.paymentMethod)}</Text>
-                      <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.text }}>{formatCurrency(sale.totalTTC, cur)}</Text>
-                    </View>
-                  </TouchableOpacity>
-                ) : (
-                  <TouchableOpacity
-                    style={[s.historyRow, { borderBottomColor: colors.borderLight }, selectedSale === sale.id && { backgroundColor: colors.primaryLight }]}
-                    onPress={() => setSelectedSale(selectedSale === sale.id ? null : sale.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={{ width: 130, fontSize: 13, color: colors.primary, fontWeight: '600' as const }}>{sale.saleNumber}</Text>
-                    <Text style={{ width: 150, fontSize: 13, color: colors.textSecondary }}>{formatDateTime(sale.createdAt)}</Text>
-                    <Text style={{ width: 120, fontSize: 13, color: colors.textSecondary }}>{getPaymentMethodLabel(sale.paymentMethod)}</Text>
-                    <Text style={{ flex: 1, fontSize: 13, color: colors.text, fontWeight: '600' as const, textAlign: 'right' as const }}>{formatCurrency(sale.totalTTC, cur)}</Text>
-                  </TouchableOpacity>
-                )}
-
-                {selectedSale === sale.id && (
+                <TouchableOpacity style={[isMobile ? s.mobileCard : s.historyRow, { borderBottomColor: colors.borderLight }, !isMobile && history.selectedSale === sale.id && { backgroundColor: colors.primaryLight }]} onPress={() => history.setSelectedSale(history.selectedSale === sale.id ? null : sale.id)} activeOpacity={0.7}>
+                  {isMobile ? (
+                    <>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: colors.primary }}>{sale.saleNumber}</Text>
+                        <StatusBadge status={sale.status} />
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 12, color: colors.textSecondary }}>{formatDateTime(sale.createdAt)}</Text>
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>{formatCurrency(sale.totalTTC, cur)}</Text>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={{ width: 130, fontSize: 13, color: colors.primary, fontWeight: '600' }}>{sale.saleNumber}</Text>
+                      <Text style={{ width: 150, fontSize: 13, color: colors.textSecondary }}>{formatDateTime(sale.createdAt)}</Text>
+                      <Text style={{ width: 120, fontSize: 13, color: colors.textSecondary }}>{getPaymentMethodLabel(sale.paymentMethod)}</Text>
+                      <Text style={{ flex: 1, fontSize: 13, color: colors.text, fontWeight: '600', textAlign: 'right' }}>{formatCurrency(sale.totalTTC, cur)}</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+                {history.selectedSale === sale.id && (
                   <View style={[s.saleDetail, { backgroundColor: colors.surfaceHover, borderBottomColor: colors.border }]}>
-                    <Text style={{ fontSize: 13, fontWeight: '700' as const, color: colors.text, marginBottom: 8 }}>Détail de la vente</Text>
-                    {sale.clientName ? (
-                      <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 6 }}>Client : {sale.clientName}</Text>
-                    ) : null}
-                    {sale.items.map((item) => (
-                      <View key={item.id} style={{ flexDirection: 'row' as const, alignItems: 'center' as const, paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.borderLight, gap: 12, flexWrap: 'wrap' as const }}>
-                        <Text style={{ fontSize: 13, fontWeight: '500' as const, flex: 1, minWidth: 120, color: colors.text }}>{item.productName}</Text>
+                    {sale.clientName ? <Text style={{ fontSize: 12, color: colors.textSecondary, marginBottom: 6 }}>Client : {sale.clientName}</Text> : null}
+                    {sale.items.map((item: any) => (
+                      <View key={item.id} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.borderLight, gap: 12, flexWrap: 'wrap' }}>
+                        <Text style={{ fontSize: 13, fontWeight: '500', flex: 1, minWidth: 120, color: colors.text }}>{item.productName}</Text>
                         <Text style={{ fontSize: 12, width: 40, color: colors.textSecondary }}>×{item.quantity}</Text>
-                        <Text style={{ fontSize: 12, width: 80, color: colors.textSecondary }}>{formatCurrency(item.unitPrice, cur)} HT</Text>
-                        <Text style={{ fontSize: 11, width: 60, color: colors.textTertiary }}>TVA {item.vatRate}%</Text>
-                        <Text style={{ fontSize: 13, fontWeight: '600' as const, width: 80, textAlign: 'right' as const, color: colors.text }}>{formatCurrency(item.totalTTC, cur)}</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '600', width: 80, textAlign: 'right', color: colors.text }}>{formatCurrency(item.totalTTC, cur)}</Text>
                       </View>
                     ))}
-                    <View style={{ marginTop: 8 }}>
-                      <Text style={{ fontSize: 12, color: colors.textSecondary }}>
-                        HT: {formatCurrency(sale.totalHT, cur)} | TVA: {formatCurrency(sale.totalTVA, cur)} | TTC: {formatCurrency(sale.totalTTC, cur)}
-                      </Text>
-                    </View>
                     {sale.status === 'paid' && (
-                      <View style={{ flexDirection: 'row' as const, gap: 8, marginTop: 12, flexWrap: 'wrap' as const }}>
-                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.primaryLight }]} onPress={() => openEditSaleForm(sale.id)}>
-                          <Pencil size={14} color={colors.primary} />
-                          <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.primary }}>Modifier</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.dangerLight }]} onPress={() => setRefundConfirm(sale.id)}>
-                          <RotateCcw size={14} color={colors.danger} />
-                          <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.danger }}>Annuler</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.surfaceHover }]} onPress={() => handlePrintReceipt(sale.id)}>
-                          <Printer size={14} color={colors.text} />
-                          <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.text }}>Imprimer</Text>
-                        </TouchableOpacity>
-                        {!sale.clientId && (
-                          <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.warningLight }]} onPress={() => { setAssignClientModal(sale.id); setAssignClientId(''); setAssignClientSearch(''); }}>
-                            <UserPlus size={14} color={colors.warning} />
-                            <Text style={{ fontSize: 12, fontWeight: '600' as const, color: colors.warning }}>Client</Text>
-                          </TouchableOpacity>
-                        )}
+                      <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.primaryLight }]} onPress={() => history.openEditSaleForm(sale.id)}><Pencil size={14} color={colors.primary} /><Text style={{ fontSize: 12, fontWeight: '600', color: colors.primary }}>Modifier</Text></TouchableOpacity>
+                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.dangerLight }]} onPress={() => history.setRefundConfirm(sale.id)}><RotateCcw size={14} color={colors.danger} /><Text style={{ fontSize: 12, fontWeight: '600', color: colors.danger }}>Annuler</Text></TouchableOpacity>
+                        <TouchableOpacity style={[s.mobileActionBtn, { backgroundColor: colors.surfaceHover }]} onPress={() => handlePrintReceipt(sale.id)}><Printer size={14} color={colors.text} /><Text style={{ fontSize: 12, fontWeight: '600', color: colors.text }}>Imprimer</Text></TouchableOpacity>
                       </View>
                     )}
                   </View>
@@ -2304,168 +799,33 @@ const renderProductGrid = () => (
       </View>
     </View>
   );
+}
 
+function AssignClientModal({ history, effectiveClients, colors, assignClientToSale }: any) {
   return (
-    <View style={[s.container, { backgroundColor: colors.background }]}>
-      <PageHeader title="Caisse" />
-
-      <View style={[s.tabs, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity
-          style={[s.tab, activeTab === 'pos' && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
-          onPress={() => setActiveTab('pos')}
-        >
-          <ShoppingBag size={16} color={activeTab === 'pos' ? colors.primary : colors.textSecondary} />
-          <Text style={{ fontSize: 14, fontWeight: '600' as const, color: activeTab === 'pos' ? colors.primary : colors.textSecondary }}>
-            Caisse
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[s.tab, activeTab === 'history' && { borderBottomColor: colors.primary, borderBottomWidth: 2 }]}
-          onPress={() => setActiveTab('history')}
-        >
-          <Receipt size={16} color={activeTab === 'history' ? colors.primary : colors.textSecondary} />
-          <Text style={{ fontSize: 14, fontWeight: '600' as const, color: activeTab === 'history' ? colors.primary : colors.textSecondary }}>
-            Historique
-          </Text>
+    <View style={s.assignOverlay}>
+      <View style={[s.assignModal, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+        <View style={[s.paymentModalHeader, { borderBottomColor: colors.border }]}>
+          <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>Associer un client</Text>
+          <TouchableOpacity onPress={() => history.setAssignClientModal(null)}><X size={20} color={colors.textSecondary} /></TouchableOpacity>
+        </View>
+        <TextInput style={[s.assignSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]} placeholder="Rechercher..." placeholderTextColor={colors.textTertiary} value={history.assignClientSearch} onChangeText={history.setAssignClientSearch} />
+        <ScrollView style={{ maxHeight: 200, marginHorizontal: 16 }}>
+          {history.filteredClientsForAssign.map((client: any) => {
+            const name = client.companyName || `${client.firstName} ${client.lastName}`;
+            const isSelected = history.assignClientId === client.id;
+            return (
+              <TouchableOpacity key={client.id} style={[s.assignItem, { borderBottomColor: colors.borderLight }, isSelected && { backgroundColor: colors.primaryLight }]} onPress={() => history.setAssignClientId(client.id)}>
+                <Text style={{ fontSize: 13, color: colors.text }}>{name}</Text>
+                {isSelected && <Check size={16} color={colors.primary} />}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        <TouchableOpacity style={[s.assignBtn, { backgroundColor: history.assignClientId ? colors.primary : colors.textTertiary }]} disabled={!history.assignClientId} onPress={() => { if (history.assignClientModal && history.assignClientId) assignClientToSale(history.assignClientModal, history.assignClientId); history.setAssignClientModal(null); }}>
+          <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '700' }}>Associer</Text>
         </TouchableOpacity>
       </View>
-
-      {activeTab === 'pos' ? (
-        <View style={{ flex: 1 }}>
-          {renderPOS()}
-        </View>
-      ) : (
-        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-          {renderHistory()}
-        </ScrollView>
-      )}
-
-      {renderPaymentModal()}
-      {renderMobileCartSheet()}
-      {renderVariantPicker()}
-      {renderManualEntry()}
-
-      <FormModal
-        visible={saleFormVisible}
-        onClose={() => setSaleFormVisible(false)}
-        title={editingSaleId ? 'Modifier la vente' : 'Nouvelle vente'}
-        subtitle={editingSaleId ? 'Mettre à jour les informations' : 'Créer une vente manuellement'}
-        onSubmit={handleSaleFormSubmit}
-        submitLabel={editingSaleId ? 'Mettre à jour' : 'Encaisser'}
-        width={520}
-      >
-        {renderSaleForm()}
-      </FormModal>
-
-      <ConfirmModal
-        visible={refundConfirm !== null}
-        title="Rembourser la vente"
-        message={`Êtes-vous sûr de vouloir rembourser la vente ${sales.find((sa) => sa.id === refundConfirm)?.saleNumber ?? ''} ?`}
-        confirmLabel="Rembourser"
-        destructive
-        onConfirm={() => { if (refundConfirm) refundSale(refundConfirm); setRefundConfirm(null); }}
-        onClose={() => setRefundConfirm(null)}
-      />
-
-      <ConfirmModal
-        visible={convertConfirm !== null}
-        title="Convertir en facture"
-        message={`Convertir la vente ${sales.find((sa) => sa.id === convertConfirm)?.saleNumber ?? ''} en facture brouillon ?`}
-        confirmLabel="Convertir"
-        onConfirm={() => { if (convertConfirm) convertSaleToInvoice(convertConfirm); setConvertConfirm(null); }}
-        onClose={() => setConvertConfirm(null)}
-      />
-
-      {assignClientModal !== null && (
-        <View style={s.assignOverlay}>
-          <View style={[s.assignModal, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-            <View style={[s.paymentModalHeader, { borderBottomColor: colors.border }]}>
-              <Text style={{ fontSize: 16, fontWeight: '700' as const, color: colors.text }}>Associer un client</Text>
-              <TouchableOpacity onPress={() => setAssignClientModal(null)}>
-                <X size={20} color={colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <TextInput
-              style={[s.assignSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-              placeholder="Rechercher..."
-              placeholderTextColor={colors.textTertiary}
-              value={assignClientSearch}
-              onChangeText={setAssignClientSearch}
-            />
-            <ScrollView style={{ maxHeight: 200, marginHorizontal: 16 }}>
-              {filteredClientsForAssign.map((client) => {
-                const name = client.companyName || `${client.firstName} ${client.lastName}`;
-                const isSelected = assignClientId === client.id;
-                return (
-                  <TouchableOpacity
-                    key={client.id}
-                    style={[s.assignItem, { borderBottomColor: colors.borderLight }, isSelected && { backgroundColor: colors.primaryLight }]}
-                    onPress={() => setAssignClientId(client.id)}
-                  >
-                    <Text style={{ fontSize: 13, color: colors.text }}>{name}</Text>
-                    {isSelected && <Check size={16} color={colors.primary} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-            <TouchableOpacity
-              style={[s.assignBtn, { backgroundColor: assignClientId ? colors.primary : colors.textTertiary }]}
-              disabled={!assignClientId}
-              onPress={() => {
-                if (assignClientModal && assignClientId) assignClientToSale(assignClientModal, assignClientId);
-                setAssignClientModal(null);
-              }}
-            >
-              <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '700' as const }}>Associer</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
-
-      <SaleConfirmationModal
-        visible={!!confirmSale}
-        sale={confirmSale ? sales.find(s => s.id === confirmSale) ?? null : null}
-        onClose={() => setConfirmSale(null)}
-        onNewSale={() => { setConfirmSale(null); setActiveTab('pos'); }}
-      />
-
-      <PaymentStatusModal
-        visible={cinetpay.active}
-        transactionId={cinetpay.transactionId}
-        paymentUrl={cinetpay.paymentUrl}
-        amount={cartTotals.totalTTC}
-        currency={effectiveCompany.currency || 'XOF'}
-        onCompleted={() => {
-          const saleItems: SaleItem[] = cart.map((c) => {
-            const lineHT = c.unitPrice * c.quantity;
-            const lineTVA = lineHT * (c.vatRate / 100);
-            const lineTTC = lineHT + lineTVA;
-            return {
-              id: generateItemId(),
-              saleId: '',
-              productId: c.productId,
-              productName: c.productName,
-              quantity: c.quantity,
-              unitPrice: c.unitPrice,
-              vatRate: c.vatRate,
-              totalHT: lineHT,
-              totalTVA: lineTVA,
-              totalTTC: lineTTC,
-            };
-          });
-          const result = createSale(saleItems, 'mobile' as SalePaymentMethod, selectedClientId || undefined);
-          if (result.success && result.saleId) {
-            setReceiptSaleId(result.saleId);
-          }
-          showToast(t('payment.successTitle'));
-          resetCartState();
-        }}
-        onCancel={() => {
-          setCinetpay({ active: false, loading: false, transactionId: null, paymentUrl: null });
-        }}
-        onRetry={handleCinetPayCheckout}
-      />
     </View>
   );
 }
-
