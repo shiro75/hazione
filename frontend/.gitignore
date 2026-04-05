@@ -6,4 +6,5 @@ expo-env.d.ts
 # @end expo-cli
 .env
 node_modules
+dist
 package-lock.json

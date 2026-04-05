@@ -5,7 +5,7 @@
  * Scrolls to top on tab change.
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity, useWindowDimensions, Switch } from 'react-native';
 import { Building2, FileText, Save, Bell, Zap, Shield, LayoutGrid, Lock, Check, LogOut, Trash2, AlertTriangle, ChevronDown, Key, Scale, ChevronRight, CreditCard, Target, Plus, X, ChevronUp } from 'lucide-react-native';
 import { Modal } from 'react-native';
@@ -878,9 +878,16 @@ export default function SettingsScreen() {
   };
   const { width } = useWindowDimensions();
   const isMobile = width < 768;
+  const params = useLocalSearchParams<{ tab?: string }>();
   const [activeTab, setActiveTab] = useState<SettingsTab>('company');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (params.tab && TAB_KEYS.some(tk => tk.key === params.tab)) {
+      setActiveTab(params.tab as SettingsTab);
+    }
+  }, [params.tab]);
 
   const [company, setCompany] = useState(dbCompany);
 

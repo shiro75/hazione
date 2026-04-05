@@ -28,7 +28,7 @@ type InvoiceTab = 'invoices' | 'credit_notes' | 'reminders' | 'recurring' | 'del
 const STATUS_FILTERS: { label: string; value: InvoiceStatus | 'all' }[] = [
   { label: 'Toutes', value: 'all' },
   { label: 'Brouillon', value: 'draft' },
-  { label: 'Validées', value: 'validated' },
+  { label: 'En attente de paiement', value: 'validated' },
   { label: 'Envoyées', value: 'sent' },
   { label: 'Payées', value: 'paid' },
   { label: 'Partielle', value: 'partial' },
@@ -461,7 +461,7 @@ export default function InvoicesScreen() {
                     {selected.isValidated && (
                       <View style={[styles.validatedBadge, { backgroundColor: colors.successLight }]}>
                         <CheckCircle size={12} color={colors.success} />
-                        <Text style={[styles.validatedText, { color: colors.success }]}>Validée · Non modifiable</Text>
+                        <Text style={[styles.validatedText, { color: colors.success }]}>En attente de paiement · Non modifiable</Text>
                       </View>
                     )}
                   </View>
@@ -514,7 +514,7 @@ export default function InvoicesScreen() {
                   </View>
 
                   <View style={styles.actionRow}>
-                    {!selected.isValidated && (
+                    {!selected.isValidated && selected.status !== 'cancelled' && (
                       <TouchableOpacity
                         style={[styles.actionBtn, { backgroundColor: colors.success }]}
                         onPress={() => setValidateConfirm(selected.id)}
@@ -533,7 +533,7 @@ export default function InvoicesScreen() {
                         <Text style={styles.actionBtnText}>Modifier</Text>
                       </TouchableOpacity>
                     )}
-                    {selected.isValidated && canCancelInvoice(selected) && (selected.status === 'paid' || selected.paidAmount > 0 || selected.status !== 'cancelled') && (
+                    {selected.isValidated && canCancelInvoice(selected) && selected.status !== 'cancelled' && (
                       <TouchableOpacity
                         style={[styles.actionBtn, { backgroundColor: colors.danger }]}
                         onPress={() => setCreditNoteConfirm(selected.id)}
@@ -543,30 +543,32 @@ export default function InvoicesScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
-                  <View style={[styles.actionRow, { marginTop: 8 }]}>
-                    <TouchableOpacity
-                      style={[styles.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }]}
-                      onPress={() => handleDownloadPDF(selected.id)}
-                      disabled={pdfLoading}
-                    >
-                      <Download size={14} color={colors.text} />
-                      <Text style={[styles.actionBtnText, { color: colors.text }]}>{pdfLoading ? 'Génération...' : 'PDF'}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }]}
-                      onPress={() => handlePrintPDF(selected.id)}
-                    >
-                      <Printer size={14} color={colors.text} />
-                      <Text style={[styles.actionBtnText, { color: colors.text }]}>Imprimer</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.actionBtn, { backgroundColor: colors.primary }]}
-                      onPress={() => handleOpenEmail(selected.id)}
-                    >
-                      <Mail size={14} color="#FFF" />
-                      <Text style={styles.actionBtnText}>Email</Text>
-                    </TouchableOpacity>
-                  </View>
+                  {selected.status !== 'cancelled' && (
+                    <View style={[styles.actionRow, { marginTop: 8 }]}>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }]}
+                        onPress={() => handleDownloadPDF(selected.id)}
+                        disabled={pdfLoading}
+                      >
+                        <Download size={14} color={colors.text} />
+                        <Text style={[styles.actionBtnText, { color: colors.text }]}>{pdfLoading ? 'Génération...' : 'PDF'}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }]}
+                        onPress={() => handlePrintPDF(selected.id)}
+                      >
+                        <Printer size={14} color={colors.text} />
+                        <Text style={[styles.actionBtnText, { color: colors.text }]}>Imprimer</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, { backgroundColor: colors.primary }]}
+                        onPress={() => handleOpenEmail(selected.id)}
+                      >
+                        <Mail size={14} color="#FFF" />
+                        <Text style={styles.actionBtnText}>Email</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                   {(selected.status === 'validated' || selected.status === 'sent' || selected.status === 'late' || selected.status === 'partial') && (
                     <View style={[styles.actionRow, { marginTop: 8 }]}>
                       <TouchableOpacity

@@ -324,6 +324,15 @@ function fmtCurReport(amount: number, currency: string = 'EUR'): string {
   return new Intl.NumberFormat('fr-FR', { style: 'currency', currency, minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(Math.round(amount));
 }
 
+function buildReportFooter(company: Company, periodLabel: string): string {
+  const now = new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' });
+  return `
+  <div style="border-top:1px solid #E2E8F0;margin-top:30px;padding-top:16px;display:flex;justify-content:space-between;align-items:center;">
+    <div style="font-size:10px;color:#94A3B8;">${company.name || 'Mon entreprise'}${company.siret ? ' · SIRET: ' + company.siret : ''}</div>
+    <div style="font-size:10px;color:#94A3B8;">Période : ${periodLabel} · Généré le ${now}</div>
+  </div>`;
+}
+
 function buildReportHeader(company: Company, title: string): string {
   const logoSection = company.logoUrl
     ? `<img src="${company.logoUrl}" alt="Logo" style="max-height:50px;max-width:180px;" />`
@@ -357,6 +366,12 @@ export function generateSalesReportHTML(params: {
   clients: Client[];
   periodLabel: string;
   currency: string;
+  healthScore?: number;
+  coverageRatio?: number;
+  unpaidAmount?: number;
+  expenses?: number;
+  abcProducts?: Array<{ name: string; ca: number; abc: 'A' | 'B' | 'C'; margin: number }>;
+  unpaidInvoicesList?: Array<{ clientName: string; amount: number; dueDate: string }>;
 }): string {
   const { company, sales, invoices, clients, periodLabel, currency } = params;
   const cur = currency;
@@ -368,6 +383,13 @@ export function generateSalesReportHTML(params: {
   const productMap = new Map<string, { name: string; qty: number; ca: number }>();
   for (const sale of paidSales) {
     for (const item of sale.items) {
+      const e = productMap.get(item.productId) || { name: item.productName, qty: 0, ca: 0 };
+      e.qty += item.quantity; e.ca += item.totalTTC;
+      productMap.set(item.productId, e);
+    }
+  }
+  for (const inv of paidInvoices) {
+    for (const item of inv.items) {
       const e = productMap.get(item.productId) || { name: item.productName, qty: 0, ca: 0 };
       e.qty += item.quantity; e.ca += item.totalTTC;
       productMap.set(item.productId, e);
@@ -396,10 +418,48 @@ export function generateSalesReportHTML(params: {
 
   let html = buildReportHeader(company, 'Rapport de ventes');
   html += `<div style="margin-bottom:16px;"><span style="font-size:13px;color:#64748B;">Période : </span><span style="font-size:13px;font-weight:600;color:#0F172A;">${periodLabel}</span></div>`;
-  html += `<div style="margin-bottom:24px;"><div class="kpi"><div class="kpi-label">CA Total</div><div class="kpi-value">${fmtCurReport(totalCA, cur)}</div></div>`;
-  html += `<div class="kpi"><div class="kpi-label">Nombre de ventes</div><div class="kpi-value">${totalCount}</div></div></div>`;
 
-  if (topProducts.length > 0) {
+  const profit = totalCA - (params.expenses ?? 0);
+  const hasHealthData = params.healthScore !== undefined;
+  if (hasHealthData) {
+    const scoreColor = (params.healthScore ?? 0) >= 70 ? '#16A34A' : (params.healthScore ?? 0) >= 40 ? '#D97706' : '#DC2626';
+    const scoreLabel = (params.healthScore ?? 0) >= 85 ? 'Excellente' : (params.healthScore ?? 0) >= 70 ? 'Bonne' : (params.healthScore ?? 0) >= 40 ? 'À surveiller' : 'Critique';
+    html += `<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:20px;margin-bottom:20px;">`;
+    html += `<div style="font-size:11px;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Synthèse</div>`;
+    html += `<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;"><div style="font-size:28px;font-weight:800;color:${scoreColor};">${params.healthScore}/100</div><div style="font-size:13px;color:${scoreColor};font-weight:600;">Santé financière : ${scoreLabel}</div></div>`;
+    const contextParts: string[] = [];
+    contextParts.push(`Ce mois, votre CA est de ${fmtCurReport(totalCA, cur)}`);
+    if (params.expenses !== undefined) {
+      contextParts.push(`avec un bénéfice brut ${profit >= 0 ? 'de' : 'négatif de'} ${fmtCurReport(profit, cur)}`);
+    }
+    if (params.coverageRatio !== undefined && params.coverageRatio < 1) {
+      contextParts.push(`Points d'attention : ratio de couverture critique à ${params.coverageRatio.toFixed(2)}×`);
+    }
+    if ((params.unpaidAmount ?? 0) > 0) {
+      contextParts.push(`Impayés : ${fmtCurReport(params.unpaidAmount ?? 0, cur)}`);
+    }
+    html += `<div style="font-size:12px;color:#475569;line-height:1.6;">${contextParts.join('. ')}.</div>`;
+    html += `</div>`;
+  }
+
+  html += `<div style="margin-bottom:24px;"><div class="kpi"><div class="kpi-label">CA Total</div><div class="kpi-value">${fmtCurReport(totalCA, cur)}</div></div>`;
+  html += `<div class="kpi"><div class="kpi-label">Nombre de ventes</div><div class="kpi-value">${totalCount}</div></div>`;
+  if (params.expenses !== undefined) {
+    html += `<div class="kpi"><div class="kpi-label">Bénéfice brut</div><div class="kpi-value" style="color:${profit >= 0 ? '#16A34A' : '#DC2626'};">${fmtCurReport(profit, cur)}</div></div>`;
+  }
+  if ((params.unpaidAmount ?? 0) > 0) {
+    html += `<div class="kpi"><div class="kpi-label">Impayés</div><div class="kpi-value" style="color:#D97706;">${fmtCurReport(params.unpaidAmount ?? 0, cur)}</div></div>`;
+  }
+  html += `</div>`;
+
+  if (params.abcProducts && params.abcProducts.length > 0) {
+    const abcColors: Record<string, string> = { A: '#16A34A', B: '#D97706', C: '#DC2626' };
+    html += `<h2>Classement ABC des produits</h2><table><thead><tr><th>Produit</th><th class="center">Classe</th><th class="right">CA</th><th class="right">Marge</th></tr></thead><tbody>`;
+    for (const p of params.abcProducts.slice(0, 15)) {
+      html += `<tr><td>${p.name}</td><td class="center"><span style="color:${abcColors[p.abc] || '#64748B'};font-weight:700;">${p.abc}</span></td><td class="right" style="font-weight:600;">${fmtCurReport(p.ca, cur)}</td><td class="right" style="color:${p.margin >= 0 ? '#16A34A' : '#DC2626'};font-weight:600;">${fmtCurReport(p.margin, cur)}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  } else if (topProducts.length > 0) {
     html += `<h2>Détail par produit</h2><table><thead><tr><th>Produit</th><th class="center">Qté vendue</th><th class="right">CA</th></tr></thead><tbody>`;
     for (const p of topProducts) {
       html += `<tr><td>${p.name}</td><td class="center">${p.qty}</td><td class="right" style="font-weight:600;">${fmtCurReport(p.ca, cur)}</td></tr>`;
@@ -424,6 +484,16 @@ export function generateSalesReportHTML(params: {
     html += `</tbody></table>`;
   }
 
+  if (params.unpaidInvoicesList && params.unpaidInvoicesList.length > 0) {
+    html += `<h2>Factures impayées</h2><table><thead><tr><th>Client</th><th class="right">Montant</th><th class="right">Échéance</th></tr></thead><tbody>`;
+    for (const inv of params.unpaidInvoicesList) {
+      const isOverdue = new Date(inv.dueDate) < new Date();
+      html += `<tr><td>${inv.clientName}</td><td class="right" style="font-weight:600;">${fmtCurReport(inv.amount, cur)}</td><td class="right" style="color:${isOverdue ? '#DC2626' : '#64748B'};font-weight:${isOverdue ? '600' : '400'};">${formatDate(inv.dueDate)}${isOverdue ? ' (en retard)' : ''}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  html += buildReportFooter(company, periodLabel);
   html += `</body></html>`;
   return html;
 }
@@ -462,6 +532,14 @@ export function generateFinancialReportHTML(params: {
   unpaidAmount: number;
   periodLabel: string;
   currency: string;
+  healthScore?: number;
+  coverageRatio?: number;
+  netCashflow?: number;
+  cashBalance?: number;
+  runwayMonths?: number;
+  expenseBreakdown?: Array<{ label: string; value: number }>;
+  unpaidInvoicesList?: Array<{ clientName: string; amount: number; dueDate: string }>;
+  projectionData?: Array<{ label: string; projected?: number }>;
 }): string {
   const { company, revenue, expenses, unpaidAmount, periodLabel, currency } = params;
   const cur = currency;
@@ -469,10 +547,76 @@ export function generateFinancialReportHTML(params: {
 
   let html = buildReportHeader(company, 'Rapport financier');
   html += `<div style="margin-bottom:16px;"><span style="font-size:13px;color:#64748B;">Période : </span><span style="font-size:13px;font-weight:600;color:#0F172A;">${periodLabel}</span></div>`;
+
+  const hasHealthData = params.healthScore !== undefined;
+  if (hasHealthData) {
+    const scoreColor = (params.healthScore ?? 0) >= 70 ? '#16A34A' : (params.healthScore ?? 0) >= 40 ? '#D97706' : '#DC2626';
+    const scoreLabel = (params.healthScore ?? 0) >= 85 ? 'Excellente' : (params.healthScore ?? 0) >= 70 ? 'Bonne' : (params.healthScore ?? 0) >= 40 ? 'À surveiller' : 'Critique';
+    html += `<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:20px;margin-bottom:20px;">`;
+    html += `<div style="font-size:11px;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Score de santé financière</div>`;
+    html += `<div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;"><div style="font-size:28px;font-weight:800;color:${scoreColor};">${params.healthScore}/100</div><div style="font-size:13px;color:${scoreColor};font-weight:600;">${scoreLabel}</div></div>`;
+    const contextParts: string[] = [];
+    contextParts.push(`Ce mois, votre CA est de ${fmtCurReport(revenue, cur)} avec un bénéfice brut ${profit >= 0 ? 'de' : 'négatif de'} ${fmtCurReport(profit, cur)}`);
+    if (params.coverageRatio !== undefined) {
+      contextParts.push(`Ratio de couverture : ${params.coverageRatio.toFixed(2)}×`);
+    }
+    if (params.runwayMonths !== undefined) {
+      contextParts.push(`Runway : ${Math.round(params.runwayMonths)} mois`);
+    }
+    html += `<div style="font-size:12px;color:#475569;line-height:1.6;">${contextParts.join('. ')}.</div>`;
+    html += `</div>`;
+  }
+
   html += `<div style="margin-bottom:24px;"><div class="kpi"><div class="kpi-label">Chiffre d'affaires</div><div class="kpi-value">${fmtCurReport(revenue, cur)}</div></div>`;
   html += `<div class="kpi"><div class="kpi-label">Charges (achats)</div><div class="kpi-value" style="color:#DC2626;">${fmtCurReport(expenses, cur)}</div></div>`;
   html += `<div class="kpi"><div class="kpi-label">Bénéfice brut</div><div class="kpi-value" style="color:${profit >= 0 ? '#16A34A' : '#DC2626'};">${fmtCurReport(profit, cur)}</div></div>`;
   html += `<div class="kpi"><div class="kpi-label">Impayés en cours</div><div class="kpi-value" style="color:#D97706;">${fmtCurReport(unpaidAmount, cur)}</div></div></div>`;
+
+  if (params.netCashflow !== undefined) {
+    const netColor = params.netCashflow >= 0 ? '#16A34A' : '#DC2626';
+    html += `<h2>Trésorerie</h2>`;
+    html += `<div style="margin-bottom:20px;"><div class="kpi"><div class="kpi-label">Flux net</div><div class="kpi-value" style="color:${netColor};">${fmtCurReport(params.netCashflow, cur)}</div></div>`;
+    if (params.cashBalance !== undefined) {
+      html += `<div class="kpi"><div class="kpi-label">Solde</div><div class="kpi-value">${fmtCurReport(params.cashBalance, cur)}</div></div>`;
+    }
+    if (params.runwayMonths !== undefined) {
+      const rwColor = params.runwayMonths >= 6 ? '#16A34A' : params.runwayMonths >= 3 ? '#D97706' : '#DC2626';
+      html += `<div class="kpi"><div class="kpi-label">Runway</div><div class="kpi-value" style="color:${rwColor};">${Math.round(params.runwayMonths)} mois</div></div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (params.expenseBreakdown && params.expenseBreakdown.length > 0) {
+    const totalExp = params.expenseBreakdown.reduce((s, e) => s + e.value, 0);
+    html += `<h2>Répartition des dépenses</h2><table><thead><tr><th>Catégorie</th><th class="right">Montant</th><th class="right">%</th></tr></thead><tbody>`;
+    for (const cat of params.expenseBreakdown.sort((a, b) => b.value - a.value)) {
+      const pct = totalExp > 0 ? Math.round((cat.value / totalExp) * 100) : 0;
+      html += `<tr><td>${cat.label}</td><td class="right" style="font-weight:600;">${fmtCurReport(cat.value, cur)}</td><td class="right">${pct}%</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  if (params.unpaidInvoicesList && params.unpaidInvoicesList.length > 0) {
+    html += `<h2>Factures impayées</h2><table><thead><tr><th>Client</th><th class="right">Montant</th><th class="right">Échéance</th></tr></thead><tbody>`;
+    for (const inv of params.unpaidInvoicesList) {
+      const isOverdue = new Date(inv.dueDate) < new Date();
+      html += `<tr><td>${inv.clientName}</td><td class="right" style="font-weight:600;">${fmtCurReport(inv.amount, cur)}</td><td class="right" style="color:${isOverdue ? '#DC2626' : '#64748B'};font-weight:${isOverdue ? '600' : '400'};">${formatDate(inv.dueDate)}${isOverdue ? ' (en retard)' : ''}</td></tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  if (params.projectionData && params.projectionData.length > 0) {
+    const hasProjections = params.projectionData.some(d => (d.projected ?? 0) > 0);
+    if (hasProjections) {
+      html += `<h2>Projections de trésorerie</h2><table><thead><tr><th>Mois</th><th class="right">Encaissements attendus</th></tr></thead><tbody>`;
+      for (const d of params.projectionData) {
+        html += `<tr><td>${d.label}</td><td class="right" style="font-weight:600;">${fmtCurReport(d.projected ?? 0, cur)}</td></tr>`;
+      }
+      html += `</tbody></table>`;
+    }
+  }
+
+  html += buildReportFooter(company, periodLabel);
   html += `</body></html>`;
   return html;
 }

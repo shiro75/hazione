@@ -1020,13 +1020,14 @@ export const [DataProvider, useData] = createContextHook(() => {
     dueDate.setDate(dueDate.getDate() + company.paymentTermsDays);
     const clientName = client.companyName || `${client.firstName} ${client.lastName}`;
 
-    const newInvoice: Invoice = {
+    const invoiceNumber = generateInvoiceNumber(company.invoicePrefix, company.invoiceNextNumber);
+    const validated = validateAndLockInvoice({
       id: generateId('inv'),
       companyId: COMPANY_ID,
       clientId,
       clientName,
-      invoiceNumber: '',
-      status: 'draft',
+      invoiceNumber,
+      status: 'validated',
       items,
       totalHT,
       totalTVA,
@@ -1036,20 +1037,38 @@ export const [DataProvider, useData] = createContextHook(() => {
       dueDate: dueDate.toISOString(),
       paymentTerms: `Paiement à ${company.paymentTermsDays} jours`,
       legalMentions: buildLegalMentions(company),
-      isValidated: false,
-      isLocked: false,
+      isValidated: true,
+      isLocked: true,
       electronicReady: false,
       createdAt: now,
-    };
+    });
 
-    queryClient.setQueryData<Invoice[]>(QUERY_KEYS.invoices, (old) => [newInvoice, ...(old ?? [])]);
-    void db.insertInvoice(newInvoice).catch(() => {
+    queryClient.setQueryData<Invoice[]>(QUERY_KEYS.invoices, (old) => [validated, ...(old ?? [])]);
+    void db.insertInvoice(validated).catch(() => {
       showToast('Erreur lors de la sauvegarde de la facture', 'error');
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.invoices });
     });
-    void writeAudit('create', 'invoice', newInvoice.id, 'Brouillon', `Facture brouillon créée pour ${clientName}`);
-    showToast('Facture brouillon créée');
-    return { success: true, invoiceId: newInvoice.id };
+
+    const newNextNumber = company.invoiceNextNumber + 1;
+    queryClient.setQueryData(QUERY_KEYS.company, (old: typeof company | undefined) =>
+      old ? { ...old, invoiceNextNumber: newNextNumber } : old
+    );
+    db.updateCompany(COMPANY_ID, { invoiceNextNumber: newNextNumber } as any).catch(() => {});
+
+    items.forEach((item) => {
+      if (item.productId) {
+        queryClient.setQueryData<Product[]>(QUERY_KEYS.products, (old) =>
+          (old ?? []).map((p) =>
+            p.id === item.productId ? { ...p, usedInValidatedInvoice: true } : p
+          )
+        );
+        db.updateProduct(item.productId, { usedInValidatedInvoice: true } as any).catch(() => {});
+      }
+    });
+
+    void writeAudit('create', 'invoice', validated.id, invoiceNumber, `Facture ${invoiceNumber} créée pour ${clientName}`);
+    showToast(`Facture ${invoiceNumber} créée`);
+    return { success: true, invoiceId: validated.id };
   }, [clients, company, showToast, queryClient, writeAudit, COMPANY_ID, QUERY_KEYS]);
 
   const revertInvoiceStatus = useCallback((id: string): { success: boolean; error?: string } => {
@@ -1175,7 +1194,9 @@ export const [DataProvider, useData] = createContextHook(() => {
     const expDate = new Date();
     expDate.setDate(expDate.getDate() + expirationDays);
     const clientName = client.companyName || `${client.firstName} ${client.lastName}`;
-    const quoteNumber = generateQuoteNumber(company.quotePrefix, company.quoteNextNumber);
+    const currentCompany = queryClient.getQueryData<typeof company>(QUERY_KEYS.company) ?? company;
+    const currentNextNumber = currentCompany.quoteNextNumber;
+    const quoteNumber = generateQuoteNumber(currentCompany.quotePrefix, currentNextNumber);
 
     const newQuote: Quote = {
       id: generateId('qt'),
@@ -1200,7 +1221,7 @@ export const [DataProvider, useData] = createContextHook(() => {
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.quotes });
     });
 
-    const newNextNumber = company.quoteNextNumber + 1;
+    const newNextNumber = currentNextNumber + 1;
     queryClient.setQueryData(QUERY_KEYS.company, (old: typeof company | undefined) =>
       old ? { ...old, quoteNextNumber: newNextNumber } : old
     );
@@ -1277,6 +1298,34 @@ export const [DataProvider, useData] = createContextHook(() => {
           (old ?? []).map((q) => (q.id === id ? { ...q, convertedToInvoiceId: result.invoiceId } : q))
         );
         db.updateQuote(id, { convertedToInvoiceId: result.invoiceId }).catch(() => {});
+        if (existing.notes && existing.notes.includes('Livraison :')) {
+          const addressMatch = existing.notes.match(/Adresse de livraison\s*:\s*(.+?)(?:\n|$)/);
+          const deliveryAddress = addressMatch ? addressMatch[1].trim() : '';
+          const dnNow = new Date().toISOString();
+          const dnYear = new Date().getFullYear();
+          const dnCount = deliveryNotes.length + 1;
+          const deliveryNumber = `BL-${dnYear}-${String(dnCount).padStart(3, '0')}`;
+          const newInvoice = invoices.find(i => i.id === result.invoiceId) || { id: result.invoiceId!, invoiceNumber: '', clientId: existing.clientId, clientName: existing.clientName, items: invoiceItems };
+          const newDN: DeliveryNote = {
+            id: generateId('dn'),
+            companyId: COMPANY_ID,
+            invoiceId: result.invoiceId!,
+            invoiceNumber: (newInvoice as any).invoiceNumber || '',
+            clientId: existing.clientId,
+            clientName: existing.clientName,
+            deliveryNumber,
+            status: 'preparation',
+            items: invoiceItems,
+            notes: deliveryAddress ? `Adresse : ${deliveryAddress}` : 'Livraison demandée',
+            createdAt: dnNow,
+          };
+          setDeliveryNotes((prev) => {
+            const updated = [newDN, ...prev];
+            void AsyncStorage.setItem(`delivery-notes-${COMPANY_ID}`, JSON.stringify(updated));
+            return updated;
+          });
+          console.log(`[acceptQuote] Delivery note ${deliveryNumber} created for quote ${existing.quoteNumber}`);
+        }
         showToast(`Devis ${existing.quoteNumber} accepté et facture créée`);
       } else {
         showToast(`Devis ${existing.quoteNumber} accepté`);
@@ -1284,7 +1333,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     } else {
       showToast(`Devis ${existing.quoteNumber} accepté`);
     }
-  }, [quotes, showToast, queryClient, QUERY_KEYS, createInvoice]);
+  }, [quotes, invoices, deliveryNotes, showToast, queryClient, QUERY_KEYS, createInvoice, COMPANY_ID]);
 
   const refuseQuote = useCallback((id: string): void => {
     const existing = quotes.find((q) => q.id === id);
@@ -1309,10 +1358,23 @@ export const [DataProvider, useData] = createContextHook(() => {
     void db.updateQuote(id, { status: 'cancelled' }).catch(() => {
       void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.quotes });
     });
+    if (existing.convertedToInvoiceId) {
+      const linkedInvoice = invoices.find((inv) => inv.id === existing.convertedToInvoiceId);
+      if (linkedInvoice && linkedInvoice.status !== 'paid' && linkedInvoice.status !== 'cancelled') {
+        const cancelledData: Partial<Invoice> = { status: 'cancelled' };
+        queryClient.setQueryData<Invoice[]>(QUERY_KEYS.invoices, (old) =>
+          (old ?? []).map((inv) => (inv.id === existing.convertedToInvoiceId ? { ...inv, ...cancelledData } : inv))
+        );
+        void db.updateInvoice(existing.convertedToInvoiceId, cancelledData).catch(() => {
+          void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.invoices });
+        });
+        void writeAudit('cancel', 'invoice', existing.convertedToInvoiceId, linkedInvoice.invoiceNumber || '', `Facture annulée suite à l'annulation du devis ${existing.quoteNumber}`);
+      }
+    }
     void writeAudit('cancel', 'quote', id, existing.quoteNumber, `Devis ${existing.quoteNumber} annulé`);
     showToast(`Devis ${existing.quoteNumber} annulé`);
     return { success: true };
-  }, [quotes, showToast, queryClient, writeAudit, QUERY_KEYS]);
+  }, [quotes, invoices, showToast, queryClient, writeAudit, QUERY_KEYS]);
 
   const deleteQuote = useCallback((quoteId: string): { success: boolean; error?: string } => {
     const quote = quotes.find((q) => q.id === quoteId);
@@ -2612,6 +2674,40 @@ export const [DataProvider, useData] = createContextHook(() => {
     return { success: true, deliveryNoteId: newDN.id };
   }, [invoices, deliveryNotes, showToast, writeAudit, COMPANY_ID]);
 
+  const createDeliveryNoteFromQuote = useCallback((data: {
+    quoteId: string;
+    quoteNumber: string;
+    clientId: string;
+    clientName: string;
+    items: OrderItem[];
+    deliveryAddress: string;
+  }): { success: boolean; error?: string; deliveryNoteId?: string } => {
+    const now = new Date().toISOString();
+    const year = new Date().getFullYear();
+    const dnCount = deliveryNotes.length + 1;
+    const deliveryNumber = `BL-${year}-${String(dnCount).padStart(3, '0')}`;
+    const newDN: DeliveryNote = {
+      id: generateId('dn'),
+      companyId: COMPANY_ID,
+      invoiceId: data.quoteId,
+      invoiceNumber: data.quoteNumber,
+      clientId: data.clientId,
+      clientName: data.clientName,
+      deliveryNumber,
+      status: 'preparation',
+      items: data.items,
+      notes: data.deliveryAddress ? `Adresse : ${data.deliveryAddress}` : 'Livraison demandée',
+      createdAt: now,
+    };
+    setDeliveryNotes((prev) => {
+      const updated = [newDN, ...prev];
+      void AsyncStorage.setItem(`delivery-notes-${COMPANY_ID}`, JSON.stringify(updated));
+      return updated;
+    });
+    console.log(`[createDeliveryNoteFromQuote] Delivery note ${deliveryNumber} created for quote ${data.quoteNumber}`);
+    return { success: true, deliveryNoteId: newDN.id };
+  }, [deliveryNotes, COMPANY_ID]);
+
   const updateDeliveryNoteStatus = useCallback((id: string, status: DeliveryNoteStatus): { success: boolean; error?: string } => {
     const dn = deliveryNotes.find((d) => d.id === id);
     if (!dn) return { success: false, error: 'Bon de livraison introuvable' };
@@ -3184,6 +3280,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     deleteRecurringInvoice,
     deliveryNotes,
     createDeliveryNote,
+    createDeliveryNoteFromQuote,
     updateDeliveryNoteStatus,
     importProducts,
     importClients,
@@ -3238,7 +3335,7 @@ export const [DataProvider, useData] = createContextHook(() => {
     addAttributeValue, removeAttributeValue, updateAttributeValuesOrder, reorderAttributeValue,
     sendInvoiceByEmail, sendQuoteByEmail,
     recurringInvoices, createRecurringInvoice, toggleRecurringInvoice, generateRecurringInvoice, deleteRecurringInvoice,
-    deliveryNotes, createDeliveryNote, updateDeliveryNoteStatus,
+    deliveryNotes, createDeliveryNote, createDeliveryNoteFromQuote, updateDeliveryNoteStatus,
     importProducts, importClients,
     findProductByBarcode,
     warehouses, warehouseTransfers,

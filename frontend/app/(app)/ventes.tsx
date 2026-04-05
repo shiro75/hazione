@@ -25,7 +25,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatCurrency, formatDate, formatPhone } from '@/utils/format';
 import PageHeader from '@/components/PageHeader';
 import FormModal from '@/components/FormModal';
-import FormField, { SelectField } from '@/components/FormField';
+import FormField from '@/components/FormField';
 import ConfirmModal from '@/components/ConfirmModal';
 import StatusBadge from '@/components/StatusBadge';
 import ClientPicker from '@/components/ClientPicker';
@@ -45,6 +45,7 @@ import { useI18n } from '@/contexts/I18nContext';
 import { shopDb } from '@/services/shopService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
+import { useAuth as useAuthForQueries } from '@/contexts/AuthContext';
 import EmptyState from '@/components/EmptyState';
 import type { Invoice } from '@/types';
 
@@ -558,7 +559,7 @@ function ClientsSection({ isMobile }: { isMobile: boolean }) {
             <Text style={[styles.errorText, { color: colors.danger }]}>{formError}</Text>
           </View>
         ) : null}
-        <SelectField label="Type" value={form.type} options={[{ label: 'Entreprise', value: 'company' }, { label: 'Particulier', value: 'individual' }]} onSelect={(v) => setForm((p) => ({ ...p, type: v as 'company' | 'individual' }))} required />
+        <DropdownPicker label="Type" value={form.type} options={[{ label: 'Entreprise', value: 'company' }, { label: 'Particulier', value: 'individual' }]} onSelect={(v) => setForm((p) => ({ ...p, type: v as 'company' | 'individual' }))} required />
         {form.type === 'company' && <FormField label="Raison sociale" value={form.companyName} onChangeText={(v) => setForm((p) => ({ ...p, companyName: v }))} placeholder="Nom de l'entreprise" required />}
         {form.type === 'individual' && (
           <View style={styles.formRow}>
@@ -798,9 +799,13 @@ const DEVIS_SORT_OPTIONS: { value: DevisSortKey; label: string }[] = [
 
 function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: { isMobile: boolean; highlightedId?: string | null; onHighlightClear?: () => void }) {
   const { colors } = useTheme();
+  const queryClient = useQueryClient();
+  const { user: authUserForQueries } = useAuthForQueries();
+  const DEVIS_COMPANY_ID = authUserForQueries?.id ?? 'anonymous';
   const {
     quotes, activeClients, sendQuote, acceptQuote, refuseQuote, convertQuoteToInvoice,
     createQuote, updateQuote, deleteQuote, cancelQuote, showToast, sendQuoteByEmail, company, duplicateQuote,
+    createDeliveryNoteFromQuote,
   } = useData();
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<DevisSortKey>('date');
@@ -885,6 +890,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
 
   const [formDelivery, setFormDelivery] = useState(false);
   const [formDeliveryPrice, setFormDeliveryPrice] = useState('15');
+  const [formDeliveryAddress, setFormDeliveryAddress] = useState('');
   const [formGlobalDiscount, setFormGlobalDiscount] = useState('');
 
   const openCreate = useCallback(() => {
@@ -894,6 +900,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
     setFormError('');
     setFormDelivery(false);
     setFormDeliveryPrice('15');
+    setFormDeliveryAddress('');
     setFormGlobalDiscount('');
     setFormVisible(true);
   }, []);
@@ -901,6 +908,11 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
   const handleClientChange = useCallback((clientId: string) => {
     setFormClientId(clientId);
     const client = activeClients.find(c => c.id === clientId);
+    if (client?.address) {
+      setFormDeliveryAddress(`${client.address}${client.postalCode ? ', ' + client.postalCode : ''}${client.city ? ' ' + client.city : ''}`);
+    } else {
+      setFormDeliveryAddress('');
+    }
     if (client?.discountPercent) {
       if (formItems.length > 0) {
         const disc = client.discountPercent || 0;
@@ -929,8 +941,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
     if (!formClientId) { setFormError('Veuillez sélectionner un client'); return; }
     if (formItems.length === 0) { setFormError('Ajoutez au moins une ligne'); return; }
     if (formDelivery) {
-      const client = activeClients.find(c => c.id === formClientId);
-      if (!client?.address) { setFormError('L\'adresse du client est requise pour la livraison'); return; }
+      if (!formDeliveryAddress.trim()) { setFormError('L\'adresse de livraison est requise'); return; }
     }
     const quoteItems: QuoteItem[] = formItems.map((li) => ({
       id: li.id,
@@ -947,15 +958,43 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
     let notes = formNotes;
     if (formDelivery) {
       const deliveryPrice = parseFloat(formDeliveryPrice) || 0;
-      notes = `${notes ? notes + '\n' : ''}Livraison : ${deliveryPrice.toFixed(2)} ${cur}`;
+      notes = `${notes ? notes + '\n' : ''}Livraison : ${deliveryPrice.toFixed(2)} ${cur}\nAdresse de livraison : ${formDeliveryAddress.trim()}`;
     }
     if (formGlobalDiscount) {
       notes = `${notes ? notes + '\n' : ''}Remise globale : ${formGlobalDiscount}%`;
     }
     const result = createQuote(formClientId, quoteItems, 30, notes);
     if (!result.success) { setFormError(result.error || 'Erreur'); return; }
+    if (formDelivery && result.quoteId) {
+      const client = activeClients.find(c => c.id === formClientId);
+      const clientName = client ? (client.companyName || `${client.firstName} ${client.lastName}`) : '';
+      const allQuotes = queryClient.getQueryData<import('@/types').Quote[]>(['quotes', DEVIS_COMPANY_ID]) ?? quotes;
+      const createdQuote = allQuotes.find(q => q.id === result.quoteId);
+      const quoteNumber = createdQuote?.quoteNumber || '';
+      console.log('[DevisSection] Creating delivery note for quote', quoteNumber, result.quoteId);
+      const orderItems = quoteItems.map((qi) => ({
+        id: qi.id,
+        orderId: '',
+        productId: qi.productId,
+        productName: qi.productName,
+        quantity: qi.quantity,
+        unitPrice: qi.unitPrice,
+        vatRate: qi.vatRate,
+        totalHT: qi.totalHT,
+        totalTVA: qi.totalTVA,
+        totalTTC: qi.totalTTC,
+      }));
+      createDeliveryNoteFromQuote({
+        quoteId: result.quoteId,
+        quoteNumber,
+        clientId: formClientId,
+        clientName,
+        items: orderItems,
+        deliveryAddress: formDeliveryAddress.trim(),
+      });
+    }
     setFormVisible(false);
-  }, [formClientId, formItems, formNotes, formDelivery, formDeliveryPrice, formGlobalDiscount, activeClients, createQuote, cur]);
+  }, [formClientId, formItems, formNotes, formDelivery, formDeliveryPrice, formDeliveryAddress, formGlobalDiscount, createQuote, cur, activeClients, createDeliveryNoteFromQuote, queryClient, DEVIS_COMPANY_ID, quotes]);
 
   const handleConvert = useCallback(() => {
     if (!convertConfirm) return;
@@ -1146,18 +1185,46 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
                     </View>
                   ))}
 
+                  {quote.notes && quote.notes.includes('Livraison :') ? (() => {
+                    const deliveryMatch = quote.notes.match(/Livraison\s*:\s*([\d.,]+)/);
+                    const deliveryPrice = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
+                    const addressMatch = quote.notes.match(/Adresse de livraison\s*:\s*(.+?)(?:\n|$)/);
+                    return (
+                      <View style={[styles.detailLineItem, { borderBottomColor: colors.borderLight, backgroundColor: '#F0F9FF' }]}>
+                        <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6 }}>
+                          <Truck size={13} color="#3B82F6" />
+                          <Text style={[styles.detailLineName, { color: '#1E40AF' }]}>Livraison</Text>
+                        </View>
+                        {addressMatch ? (
+                          <Text style={{ fontSize: 11, color: '#64748B', marginTop: 2 }}>{addressMatch[1]}</Text>
+                        ) : null}
+                        <Text style={[styles.detailLineTotal, { color: '#1E40AF' }]}>{formatCurrency(deliveryPrice, cur)}</Text>
+                      </View>
+                    );
+                  })() : null}
+
                   <View style={[styles.detailTotals, { borderTopColor: colors.border }]}>
                     <View style={styles.detailTotalRow}>
                       <Text style={[styles.detailTotalLabel, { color: colors.textSecondary }]}>Total HT</Text>
                       <Text style={[styles.detailTotalValue, { color: colors.textSecondary }]}>{formatCurrency(quote.totalHT, cur)}</Text>
                     </View>
+                    {quote.notes && quote.notes.includes('Livraison :') ? (() => {
+                      const deliveryMatch = quote.notes.match(/Livraison\s*:\s*([\d.,]+)/);
+                      const deliveryPrice = deliveryMatch ? parseFloat(deliveryMatch[1]) : 0;
+                      return (
+                        <View style={styles.detailTotalRow}>
+                          <Text style={[styles.detailTotalLabel, { color: '#3B82F6' }]}>Livraison</Text>
+                          <Text style={[styles.detailTotalValue, { color: '#3B82F6' }]}>{formatCurrency(deliveryPrice, cur)}</Text>
+                        </View>
+                      );
+                    })() : null}
                     <View style={styles.detailTotalRow}>
                       <Text style={[styles.detailTotalLabel, { color: colors.textSecondary }]}>TVA</Text>
                       <Text style={[styles.detailTotalValue, { color: colors.textSecondary }]}>{formatCurrency(quote.totalTVA, cur)}</Text>
                     </View>
                     <View style={[styles.detailTotalRow, styles.detailTotalRowMain]}>
                       <Text style={[styles.detailTotalLabelMain, { color: colors.text }]}>Total TTC</Text>
-                      <Text style={[styles.detailTotalValueMain, { color: colors.primary }]}>{formatCurrency(quote.totalTTC, cur)}</Text>
+                      <Text style={[styles.detailTotalValueMain, { color: colors.primary }]}>{formatCurrency(quote.totalTTC + (quote.notes?.includes('Livraison :') ? (parseFloat(quote.notes.match(/Livraison\s*:\s*([\d.,]+)/)?.[1] || '0')) : 0), cur)}</Text>
                     </View>
                   </View>
 
@@ -1238,7 +1305,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
             <Text style={[styles.errorText, { color: colors.danger }]}>{formError}</Text>
           </View>
         ) : null}
-        <ClientPicker selectedClientId={formClientId} onSelect={handleClientChange} required />
+        <ClientPicker selectedClientId={formClientId} onSelect={handleClientChange} required showQuickAdd />
         {formClientId ? (() => {
           const selectedClient = activeClients.find(c => c.id === formClientId);
           if (selectedClient?.discountPercent) {
@@ -1285,21 +1352,20 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
                 placeholder="15.00"
                 keyboardType="decimal-pad"
               />
-              {formClientId ? (() => {
-                const cl = activeClients.find(c => c.id === formClientId);
-                if (!cl?.address) {
-                  return (
-                    <View style={[styles.errorBanner, { backgroundColor: '#FEF2F2' }]}>
-                      <Text style={{ fontSize: 12, color: '#DC2626' }}>L'adresse du client est requise pour la livraison. Veuillez la renseigner dans la fiche client.</Text>
-                    </View>
-                  );
-                }
-                return (
-                  <View style={[styles.discountBanner, { backgroundColor: '#F0F9FF', borderColor: '#BFDBFE' }]}>
-                    <Text style={{ fontSize: 12, color: '#1E40AF' }}>Adresse : {cl.address}, {cl.postalCode} {cl.city}</Text>
-                  </View>
-                );
-              })() : null}
+              <FormField
+                label="Adresse de livraison"
+                value={formDeliveryAddress}
+                onChangeText={setFormDeliveryAddress}
+                placeholder="Adresse complète de livraison"
+                required
+                multiline
+                numberOfLines={2}
+              />
+              {!formDeliveryAddress.trim() ? (
+                <View style={[styles.errorBanner, { backgroundColor: '#FEF2F2' }]}>
+                  <Text style={{ fontSize: 12, color: '#DC2626' }}>L'adresse de livraison est obligatoire.</Text>
+                </View>
+              ) : null}
             </>
           ) : null}
         </View>
@@ -1416,7 +1482,42 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
         ]}
         pastePlaceholder={"Client;Description;Montant;Date\nDupont SARL;Prestation web;1500;2026-03-01"}
         onImport={(rows: Record<string, string>[]) => {
-          return { imported: rows.length, errors: [] };
+          let imported = 0;
+          const errors: string[] = [];
+          rows.forEach((row, idx) => {
+            const clientName = (row.clientName || '').trim();
+            if (!clientName) { errors.push(`Ligne ${idx + 1}: Client requis`); return; }
+            const client = activeClients.find(c => {
+              const name = c.companyName || `${c.firstName} ${c.lastName}`;
+              return name.toLowerCase() === clientName.toLowerCase();
+            });
+            if (!client) { errors.push(`Ligne ${idx + 1}: Client "${clientName}" introuvable`); return; }
+            const amount = parseFloat(row.amount || '0') || 0;
+            const description = (row.description || 'Article import\u00e9').trim();
+            const quoteItems: QuoteItem[] = [{
+              id: `qi_imp_${Date.now()}_${idx}`,
+              quoteId: '',
+              productId: '',
+              productName: description,
+              quantity: 1,
+              unitPrice: amount,
+              vatRate: 20 as import('@/types').VATRate,
+              totalHT: amount,
+              totalTVA: amount * 0.2,
+              totalTTC: amount * 1.2,
+            }];
+            const result = createQuote(client.id, quoteItems, 30);
+            if (result.success) imported++;
+            else errors.push(`Ligne ${idx + 1}: ${result.error || 'Erreur'}`);
+          });
+          if (imported > 0) {
+            void queryClient.invalidateQueries({ queryKey: ['quotes', DEVIS_COMPANY_ID] });
+            void queryClient.refetchQueries({ queryKey: ['quotes', DEVIS_COMPANY_ID] });
+            setTimeout(() => {
+              void queryClient.refetchQueries({ queryKey: ['quotes', DEVIS_COMPANY_ID] });
+            }, 1000);
+          }
+          return { imported, errors };
         }}
       />
     </>
@@ -1426,7 +1527,7 @@ function DevisSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: 
 function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear }: { isMobile: boolean; highlightedId?: string | null; onHighlightClear?: () => void }) {
   const { colors } = useTheme();
   const {
-    invoices, validateInvoice, recordPartialPayment,
+    invoices, recordPartialPayment,
     createCreditNote, company, activeClients, showToast,
     revertInvoiceStatus, updateInvoiceDueDate,
   } = useData();
@@ -1497,15 +1598,15 @@ function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear 
 
   const STATUS_FILTERS = [
     { label: 'Tous', value: 'all' },
-    { label: 'Brouillon', value: 'draft' },
-    { label: 'Validée', value: 'validated' },
+    { label: 'En attente de paiement', value: 'validated' },
     { label: 'Envoyée', value: 'sent' },
     { label: 'Payée', value: 'paid' },
     { label: 'En retard', value: 'late' },
+    { label: 'Annulée', value: 'cancelled' },
   ];
 
   const totalAmount = useMemo(() => invoices.reduce((s, i) => s + i.totalTTC, 0), [invoices]);
-  const unpaidCount = useMemo(() => invoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled' && i.status !== 'draft').length, [invoices]);
+  const unpaidCount = useMemo(() => invoices.filter(i => i.status !== 'paid' && i.status !== 'cancelled').length, [invoices]);
 
   return (
     <>
@@ -1574,7 +1675,17 @@ function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear 
             const remaining = inv.totalTTC - (inv.paidAmount || 0);
             const isPartial = inv.paidAmount > 0 && inv.paidAmount < inv.totalTTC;
             return (
-              <TouchableOpacity key={inv.id} style={[styles.listRow, i < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]} onPress={() => setExpandedInvoiceId(inv.id)} activeOpacity={0.7}>
+              <TouchableOpacity key={inv.id} style={[styles.listRow, i < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.borderLight }]} onPress={() => {
+                if ((inv.status === 'validated' || inv.status === 'sent' || inv.status === 'late' || isPartial) && inv.status !== 'paid' && inv.status !== 'cancelled') {
+                  setPaymentModal(inv.id);
+                  setPaymentAmount(String(remaining.toFixed(2)));
+                  setPaymentMethod('bank_transfer');
+                  setPaymentDate(new Date().toISOString().slice(0, 10));
+                  setPaymentDueDays('');
+                } else {
+                  setExpandedInvoiceId(inv.id);
+                }
+              }} activeOpacity={0.7}>
                 <View style={styles.listRowMain}>
                   <View style={styles.listRowInfo}>
                     <Text style={[styles.listRowTitle, { color: colors.text }]}>{inv.invoiceNumber || 'Brouillon'}</Text>
@@ -1762,63 +1873,61 @@ function FacturesSection({ isMobile: _isMobile, highlightedId, onHighlightClear 
                 </View>
               )}
             </View>
-            <View style={{ gap: 8, marginBottom: 8 }}>
-              <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.textTertiary, textTransform: 'uppercase' as const, letterSpacing: 0.5 }}>ÉCHÉANCE</Text>
-              <View style={{ flexDirection: 'row' as const, gap: 8, alignItems: 'center' as const }}>
-                <TextInput
-                  style={[styles.emailFieldInput, { flex: 1, color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-                  placeholder="Jours"
-                  placeholderTextColor={colors.textTertiary}
-                  keyboardType="number-pad"
-                  defaultValue={String(Math.max(0, Math.round((new Date(inv.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))))}
-                  onEndEditing={(e) => {
-                    const days = parseInt(e.nativeEvent.text, 10);
-                    if (!isNaN(days) && days >= 0) {
-                      updateInvoiceDueDate(inv.id, days);
-                    }
-                  }}
-                />
-                <Text style={{ fontSize: 13, color: colors.textSecondary }}>jours</Text>
+            {(inv.status === 'validated' || inv.status === 'sent' || inv.status === 'late' || inv.status === 'partial') && (
+              <View style={{ gap: 8, marginBottom: 8 }}>
+                <Text style={{ fontSize: 11, fontWeight: '600' as const, color: colors.textTertiary, textTransform: 'uppercase' as const, letterSpacing: 0.5 }}>ÉCHÉANCE</Text>
+                <View style={{ flexDirection: 'row' as const, gap: 8, alignItems: 'center' as const }}>
+                  <TextInput
+                    style={[styles.emailFieldInput, { flex: 1, color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
+                    placeholder="Jours"
+                    placeholderTextColor={colors.textTertiary}
+                    keyboardType="number-pad"
+                    defaultValue={String(Math.max(0, Math.round((new Date(inv.dueDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24))))}
+                    onEndEditing={(e) => {
+                      const days = parseInt(e.nativeEvent.text, 10);
+                      if (!isNaN(days) && days >= 0) {
+                        updateInvoiceDueDate(inv.id, days);
+                      }
+                    }}
+                  />
+                  <Text style={{ fontSize: 13, color: colors.textSecondary }}>jours</Text>
+                </View>
+                <View style={[{ padding: 10, borderRadius: 8, backgroundColor: colors.surfaceHover }]}>
+                  <Text style={{ fontSize: 12, color: colors.textSecondary }}>{inv.paymentTerms || `Paiement à ${company.paymentTermsDays} jours`}</Text>
+                </View>
               </View>
-              <View style={[{ padding: 10, borderRadius: 8, backgroundColor: colors.surfaceHover }]}>
-                <Text style={{ fontSize: 12, color: colors.textSecondary }}>{inv.paymentTerms || `Paiement à ${company.paymentTermsDays} jours`}</Text>
-              </View>
-            </View>
+            )}
             <View style={{ flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 8, marginTop: 12 }}>
-              {inv.status === 'draft' && (
-                <TouchableOpacity onPress={() => { validateInvoice(inv.id); setExpandedInvoiceId(null); }} style={[styles.detailActionBtn, { backgroundColor: colors.primary }]}>
-                  <Check size={13} color="#FFF" />
-                  <Text style={styles.detailActionBtnText}>Valider</Text>
-                </TouchableOpacity>
-              )}
               {(inv.status === 'validated' || inv.status === 'sent' || inv.status === 'late' || inv.status === 'partial') && (
                 <TouchableOpacity onPress={() => { const r = revertInvoiceStatus(inv.id); if (!r.success) showToast(r.error || 'Erreur', 'error'); }} style={[styles.detailActionBtn, { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.cardBorder }]}>
                   <RefreshCw size={13} color={colors.text} />
                   <Text style={[styles.detailActionBtnText, { color: colors.text }]}>Statut précédent</Text>
                 </TouchableOpacity>
               )}
-              {(inv.status === 'validated' || inv.status === 'sent' || inv.status === 'late' || isPartial) && inv.status !== 'paid' && (
+              {(inv.status === 'validated' || inv.status === 'sent' || inv.status === 'late' || isPartial) && inv.status !== 'paid' && inv.status !== 'cancelled' && (
                 <TouchableOpacity onPress={() => { setExpandedInvoiceId(null); setTimeout(() => { setPaymentModal(inv.id); setPaymentAmount(String(remaining.toFixed(2))); setPaymentMethod('bank_transfer'); setPaymentDate(new Date().toISOString().slice(0, 10)); setPaymentDueDays(''); }, 100); }} style={[styles.detailActionBtn, { backgroundColor: colors.success }]}>
                   <CreditCard size={13} color="#FFF" />
-                  <Text style={styles.detailActionBtnText}>Paiement</Text>
+                  <Text style={styles.detailActionBtnText}>Payer</Text>
                 </TouchableOpacity>
               )}
-              {inv.status !== 'paid' && !inv.creditNoteId && inv.status !== 'draft' && (
+              {inv.status !== 'paid' && inv.status !== 'cancelled' && !inv.creditNoteId && (
                 <TouchableOpacity onPress={() => { setExpandedInvoiceId(null); setTimeout(() => setCreditNoteModal(inv.id), 100); }} style={[styles.detailActionBtn, { backgroundColor: colors.danger }]}>
                   <X size={13} color="#FFF" />
                   <Text style={styles.detailActionBtnText}>Avoir</Text>
                 </TouchableOpacity>
               )}
-              {(inv.status !== 'paid' && inv.status !== 'cancelled' && inv.status !== 'draft') && (
+              {inv.status !== 'paid' && inv.status !== 'cancelled' && (
                 <TouchableOpacity onPress={() => { setExpandedInvoiceId(null); setTimeout(() => setReminderInvoice(inv), 100); }} style={[styles.detailActionBtn, { backgroundColor: '#D97706' }]}>
                   <Bell size={13} color="#FFF" />
                   <Text style={styles.detailActionBtnText}>Rappeler</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity onPress={() => { void handleGeneratePDF(inv.id); }} style={[styles.detailActionBtn, { backgroundColor: colors.primaryLight, borderWidth: 1, borderColor: colors.primary + '30' }]}>
-                <Printer size={13} color={colors.primary} />
-                <Text style={[styles.detailActionBtnText, { color: colors.primary }]}>PDF</Text>
-              </TouchableOpacity>
+              {inv.status !== 'cancelled' && (
+                <TouchableOpacity onPress={() => { void handleGeneratePDF(inv.id); }} style={[styles.detailActionBtn, { backgroundColor: colors.primaryLight, borderWidth: 1, borderColor: colors.primary + '30' }]}>
+                  <Printer size={13} color={colors.primary} />
+                  <Text style={[styles.detailActionBtnText, { color: colors.primary }]}>PDF</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </FormModal>
         );
@@ -2497,7 +2606,7 @@ function RecurrentesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
           </View>
         ) : null}
         <ClientPicker selectedClientId={formClientId} onSelect={setFormClientId} required />
-        <SelectField label="Fréquence" value={formFrequency} options={FREQ_OPTIONS.map(o => ({ label: o.label, value: o.value }))} onSelect={(v) => setFormFrequency(v as RecurringFrequency)} required />
+        <DropdownPicker label="Fréquence" value={formFrequency} options={FREQ_OPTIONS.map(o => ({ label: o.label, value: o.value }))} onSelect={(v) => setFormFrequency(v as RecurringFrequency)} required />
         <FormField label="Date de début" value={formStartDate} onChangeText={setFormStartDate} placeholder="AAAA-MM-JJ" />
         <View style={styles.formSection}>
           <Text style={[styles.formSectionTitle, { color: colors.textTertiary }]}>LIGNES</Text>

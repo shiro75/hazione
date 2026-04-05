@@ -17,7 +17,7 @@ import { formatCurrency, formatDate, formatPhone } from '@/utils/format';
 import CSVImportModal from '@/components/CSVImportModal';
 import PageHeader from '@/components/PageHeader';
 import FormModal from '@/components/FormModal';
-import FormField, { SelectField } from '@/components/FormField';
+import FormField from '@/components/FormField';
 import ConfirmModal from '@/components/ConfirmModal';
 import DropdownPicker from '@/components/DropdownPicker';
 import type { Client } from '@/types';
@@ -506,7 +506,7 @@ export default function ClientsScreen() {
           </View>
         ) : null}
 
-        <SelectField
+        <DropdownPicker
           label="Type de client"
           value={form.type}
           options={[

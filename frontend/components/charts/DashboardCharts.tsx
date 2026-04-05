@@ -400,40 +400,91 @@ export function HourlyBarChart({
   }, [startHour, endHour]);
 
   const slicedData = useMemo(() => hours.map(h => data[h] ?? 0), [hours, data]);
-  const maxVal = useMemo(() => Math.max(...slicedData, 1), [slicedData]);
+  const rawMax = useMemo(() => Math.max(...slicedData, 1), [slicedData]);
+  const maxVal = useMemo(() => rawMax * 1.2, [rawMax]);
   const totalSales = useMemo(() => slicedData.reduce((s, v) => s + v, 0), [slicedData]);
+  const avgVal = useMemo(() => {
+    const nonZero = slicedData.filter(v => v > 0);
+    return nonZero.length > 0 ? nonZero.reduce((s, v) => s + v, 0) / nonZero.length : 0;
+  }, [slicedData]);
+  const avgH = maxVal > 0 && avgVal > 0 ? (avgVal / maxVal) * barMaxHeight : 0;
+
+  const peakIdx = useMemo(() => {
+    let maxI = 0;
+    for (let i = 1; i < slicedData.length; i++) {
+      if (slicedData[i] > slicedData[maxI]) maxI = i;
+    }
+    return slicedData[maxI] > 0 ? maxI : -1;
+  }, [slicedData]);
+
+  const peakHour = peakIdx >= 0 ? hours[peakIdx] : -1;
+  const peakVal = peakIdx >= 0 ? slicedData[peakIdx] : 0;
+  const PEAK_COLOR = '#F59E0B';
 
   return (
     <View>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: barMaxHeight + 20 }}>
+      {peakHour >= 0 && peakVal > 0 && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          <View style={{ backgroundColor: PEAK_COLOR + '18', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={{ fontSize: 10, fontWeight: '700' as const, color: PEAK_COLOR }}>⚡ Heure de pointe : {peakHour}h</Text>
+            <Text style={{ fontSize: 9, fontWeight: '600' as const, color: PEAK_COLOR, opacity: 0.7 }}>({peakVal} vente{peakVal > 1 ? 's' : ''})</Text>
+          </View>
+        </View>
+      )}
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: barMaxHeight + 20, position: 'relative' }}>
+        {avgH > 0 && (
+          <View style={{
+            position: 'absolute', left: 0, right: 0, bottom: avgH + 18,
+            borderBottomWidth: 1.2, borderBottomColor: primaryColor, borderStyle: 'dashed', opacity: 0.35,
+            zIndex: 1,
+          }}>
+            <View style={{ position: 'absolute', right: 0, top: -14 }}>
+              <Text style={{ fontSize: 8, fontWeight: '600' as const, color: primaryColor, opacity: 0.6 }}>
+                Moy. {avgVal.toFixed(1)}
+              </Text>
+            </View>
+          </View>
+        )}
         {hours.map((h, idx) => {
           const val = slicedData[idx];
-          const barH = maxVal > 0 ? Math.max((val / maxVal) * barMaxHeight, val > 0 ? 6 : 2) : 2;
+          const barH = maxVal > 0 ? Math.max((val / maxVal) * barMaxHeight, val > 0 ? 6 : 0) : 0;
           const intensity = maxVal > 0 ? val / maxVal : 0;
-          const barColor = val > 0 ? primaryColor : bgColor;
-          const barOpacity = val > 0 ? 0.4 + intensity * 0.6 : 0.3;
+          const ghostH = barMaxHeight * 0.12;
+          const isPeak = idx === peakIdx;
+          const barColor = isPeak ? PEAK_COLOR : primaryColor;
 
           return (
             <View key={h} style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end' }}>
               {val > 0 && (
-                <Text style={{ fontSize: 8, fontWeight: '700' as const, color: primaryColor, marginBottom: 2 }}>
+                <Text style={{ fontSize: 8, fontWeight: '700' as const, color: isPeak ? PEAK_COLOR : primaryColor, marginBottom: 2 }}>
                   {val}
                 </Text>
               )}
-              <View
-                style={{
-                  width: '70%',
-                  height: barH,
-                  backgroundColor: barColor,
-                  borderRadius: 3,
-                  opacity: barOpacity,
-                }}
-              />
+              {val === 0 ? (
+                <View style={{ width: '70%', height: ghostH, backgroundColor: bgColor, borderRadius: 3, opacity: 0.4 }} />
+              ) : (
+                <View
+                  style={{
+                    width: isPeak ? '80%' : '70%',
+                    height: barH,
+                    backgroundColor: barColor,
+                    borderRadius: 3,
+                    opacity: isPeak ? 1 : (0.4 + intensity * 0.6),
+                    ...(isPeak ? {
+                      shadowColor: PEAK_COLOR,
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 4,
+                      elevation: 3,
+                    } : {}),
+                  }}
+                />
+              )}
               <Text style={{
                 fontSize: 8,
-                color: textColor,
+                color: isPeak ? PEAK_COLOR : textColor,
                 marginTop: 3,
-                fontWeight: '500' as const,
+                fontWeight: isPeak ? '700' as const : '500' as const,
               }}>
                 {h}h
               </Text>
@@ -442,7 +493,7 @@ export function HourlyBarChart({
         })}
       </View>
       {totalSales > 0 && (
-        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 8 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', marginTop: 8 }}>
           <Text style={{ fontSize: 10, color: textColor, fontWeight: '600' as const }}>
             Total : {totalSales} vente{totalSales > 1 ? 's' : ''}
           </Text>
@@ -776,7 +827,7 @@ interface SemiCircularGaugeProps {
 export function SemiCircularGauge({
   current,
   target,
-  size = 100,
+  size = 200,
   color = '#6366F1',
   bgColor = '#E5E7EB',
   label = 'Objectif CA mensuel',
@@ -1064,13 +1115,26 @@ export function StackedBarChart({
   textColor = '#9CA3AF',
 }: StackedBarChartProps) {
   const barAreaH = height - 30;
-  const maxVal = useMemo(() => {
+  const rawMax = useMemo(() => {
     return Math.max(...data.map(d => d.segments.reduce((s, seg) => s + seg.value, 0)), 1);
   }, [data]);
+  const maxVal = useMemo(() => rawMax * 1.2, [rawMax]);
+  const avgTotal = useMemo(() => {
+    const totals = data.map(d => d.segments.reduce((s, seg) => s + seg.value, 0)).filter(t => t > 0);
+    return totals.length > 0 ? totals.reduce((s, t) => s + t, 0) / totals.length : 0;
+  }, [data]);
+  const avgH = maxVal > 0 && avgTotal > 0 ? (avgTotal / maxVal) * barAreaH : 0;
+  const ghostH = barAreaH * 0.06;
 
   return (
     <View style={{ width, height }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: barAreaH, gap: 6 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: barAreaH, gap: 6, position: 'relative' }}>
+        {avgH > 0 && (
+          <View style={{
+            position: 'absolute', left: 0, right: 0, bottom: avgH,
+            borderBottomWidth: 1.2, borderBottomColor: textColor, borderStyle: 'dashed', opacity: 0.3, zIndex: 1,
+          }} />
+        )}
         {data.map((item, i) => {
           const total = item.segments.reduce((s, seg) => s + seg.value, 0);
           return (
@@ -1080,17 +1144,21 @@ export function StackedBarChart({
                   {total}
                 </Text>
               )}
-              <View style={{ width: '70%', borderRadius: 4, overflow: 'hidden' }}>
-                {item.segments.filter(s => s.value > 0).reverse().map((seg, si) => {
-                  const segH = maxVal > 0 ? Math.max((seg.value / maxVal) * barAreaH, seg.value > 0 ? 4 : 0) : 0;
-                  return (
-                    <View
-                      key={si}
-                      style={{ width: '100%', height: segH, backgroundColor: seg.color }}
-                    />
-                  );
-                })}
-              </View>
+              {total === 0 ? (
+                <View style={{ width: '70%', height: ghostH, backgroundColor: '#D1D5DB', borderRadius: 4, opacity: 0.3 }} />
+              ) : (
+                <View style={{ width: '70%', borderRadius: 4, overflow: 'hidden' }}>
+                  {item.segments.filter(s => s.value > 0).reverse().map((seg, si) => {
+                    const segH = maxVal > 0 ? Math.max((seg.value / maxVal) * barAreaH, seg.value > 0 ? 4 : 0) : 0;
+                    return (
+                      <View
+                        key={si}
+                        style={{ width: '100%', height: segH, backgroundColor: seg.color }}
+                      />
+                    );
+                  })}
+                </View>
+              )}
               <Text style={{ fontSize: 8, color: textColor, marginTop: 3, fontWeight: '500' as const }}>
                 {item.label}
               </Text>
@@ -1227,15 +1295,30 @@ export function GroupedBarChart({
   textColor = '#9CA3AF',
 }: GroupedBarChartProps) {
   const barAreaH = height - 44;
-  const maxVal = useMemo(() => Math.max(...data.flatMap(d => [d.valueA, d.valueB]), 1), [data]);
+  const rawMax = useMemo(() => Math.max(...data.flatMap(d => [d.valueA, d.valueB]), 1), [data]);
+  const maxVal = useMemo(() => rawMax * 1.2, [rawMax]);
+  const avgA = useMemo(() => {
+    const nonZero = data.filter(d => d.valueA > 0);
+    return nonZero.length > 0 ? nonZero.reduce((s, d) => s + d.valueA, 0) / nonZero.length : 0;
+  }, [data]);
+  const avgH = maxVal > 0 && avgA > 0 ? (avgA / maxVal) * barAreaH : 0;
+  const ghostH = barAreaH * 0.06;
 
   return (
     <View style={{ width, height }}>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: barAreaH, gap: 2 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: barAreaH, gap: 2, position: 'relative' }}>
+        {avgH > 0 && (
+          <View style={{
+            position: 'absolute', left: 0, right: 0, bottom: avgH,
+            borderBottomWidth: 1.2, borderBottomColor: colorA, borderStyle: 'dashed', opacity: 0.3, zIndex: 1,
+          }} />
+        )}
         {data.map((item, i) => {
           const hA = maxVal > 0 ? Math.max((item.valueA / maxVal) * barAreaH, item.valueA > 0 ? 4 : 0) : 0;
           const hB = maxVal > 0 ? Math.max((item.valueB / maxVal) * barAreaH, item.valueB > 0 ? 4 : 0) : 0;
           const change = item.change;
+          const showGhostA = item.valueA === 0;
+          const showGhostB = item.valueB === 0;
 
           return (
             <View key={i} style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-end' }}>
@@ -1250,8 +1333,8 @@ export function GroupedBarChart({
                 </Text>
               )}
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 2, width: '80%' }}>
-                <View style={{ flex: 1, height: hB, backgroundColor: colorB, borderRadius: 2 }} />
-                <View style={{ flex: 1, height: hA, backgroundColor: colorA, borderRadius: 2 }} />
+                <View style={{ flex: 1, height: showGhostB ? ghostH : hB, backgroundColor: colorB, borderRadius: 2, opacity: showGhostB ? 0.3 : 1 }} />
+                <View style={{ flex: 1, height: showGhostA ? ghostH : hA, backgroundColor: showGhostA ? '#D1D5DB' : colorA, borderRadius: 2, opacity: showGhostA ? 0.3 : 1 }} />
               </View>
             </View>
           );

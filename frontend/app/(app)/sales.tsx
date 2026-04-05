@@ -1,13 +1,8 @@
 /**
- ** @fileoverview POS (Point of Sale) screen with product grid, cart, and payment modal.
- * Supports cash, card, mobile money (Wave/Orange Money/TWINT), mixed payments, and manual entry.
- * Includes sales history with filters by date and payment method.
- *
- * Payment validation rules:
- * - Cash: "Montant donné" must be filled (ideally >= total).
- * - Card: User must confirm payment received before validating.
- * - Wave / Orange Money / TWINT: Phone number field is required.
- * - Mixed: Sum of both amounts must equal TTC total.
+ * @fileoverview POS (Point of Sale) screen — orchestrator component.
+ * Delegates rendering to sub-components in components/sales/.
+ * Types are in types/sales.types.ts, constants in constants/paymentMethods.ts,
+ * and styles in components/sales/salesStyles.ts.
  *
  * IMPORTANT: All conditional rendering of string variables uses ternary operators
  * (value ? <JSX> : null) instead of (value && <JSX>) to avoid React Native Web
@@ -18,12 +13,10 @@ import {
   View,
   Text,
   ScrollView,
-  StyleSheet,
   TouchableOpacity,
   TextInput,
   useWindowDimensions,
   Animated,
-  Platform,
   Modal,
   Pressable,
   Image,
@@ -37,7 +30,6 @@ import {
   Minus,
   Trash2,
   CreditCard,
-  Banknote,
   ArrowRightLeft,
   Smartphone,
   Receipt,
@@ -74,83 +66,26 @@ import { generateReceiptHTML, generateAndSharePDF } from '@/services/pdfService'
 import { useI18n } from '@/contexts/I18nContext';
 import PaymentStatusModal from '@/components/PaymentStatusModal';
 import SaleConfirmationModal from '@/components/SaleConfirmationModal';
+import ClientPicker from '@/components/ClientPicker';
 import { createCinetPayPayment } from '@/services/paymentService';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBanking } from '@/contexts/BankingContext';
-import { SALES_ALLOWED_TYPES } from '@/constants/productTypes';
-import { isStockableType } from '@/constants/productTypes';
+import { SALES_ALLOWED_TYPES, isStockableType } from '@/constants/productTypes';
 
-type SalesTab = 'pos' | 'history';
-type DateFilter = 'today' | '7days' | '30days' | 'all';
-type PaymentCategory = 'cash' | 'card' | 'mixed' | 'digital';
-type DigitalSubMethod = 'mobile_wave' | 'mobile_om' | 'twint';
-type PaymentMethodFilter = 'all' | PaymentCategory;
+import type { SalesTab, DateFilter, PaymentCategory, DigitalSubMethod, PaymentMethodFilter, POSCartItem, CinetPayState } from '@/types/sales.types';
+import {
+  PAYMENT_CATEGORIES,
+  ALL_PAYMENT_CATEGORIES_WITH_DIGITAL,
+  DIGITAL_SUB_METHODS,
+  MIXED_SUB_METHODS,
+  DATE_FILTER_KEYS,
+  isDigitalMethod,
+  getPaymentCategory,
+  generateItemId,
+} from '@/constants/paymentMethods';
+import s from '@/components/sales/salesStyles';
 
-interface CartItem {
-  productId: string;
-  productName: string;
-  variantId?: string;
-  variantLabel?: string;
-  quantity: number;
-  unitPrice: number;
-  vatRate: VATRate;
-}
-
-const PAYMENT_CATEGORIES: { value: PaymentCategory; label: string; icon: React.ComponentType<{ size: number; color: string }> }[] = [
-  { value: 'cash', label: 'Espèces', icon: Banknote },
-  { value: 'card', label: 'CB', icon: CreditCard },
-  { value: 'mixed', label: 'Mixte', icon: ArrowRightLeft },
-];
-
-const ALL_PAYMENT_CATEGORIES_WITH_DIGITAL: { value: PaymentCategory; label: string; icon: React.ComponentType<{ size: number; color: string }> }[] = [
-  { value: 'cash', label: 'Espèces', icon: Banknote },
-  { value: 'card', label: 'CB', icon: CreditCard },
-  { value: 'mixed', label: 'Mixte', icon: ArrowRightLeft },
-  { value: 'digital', label: 'Paiement Digital', icon: Smartphone },
-];
-
-const DIGITAL_SUB_METHODS: { value: DigitalSubMethod; label: string; color: string }[] = [
-  { value: 'mobile_wave', label: 'Wave', color: '#1DC3E2' },
-  { value: 'mobile_om', label: 'Orange Money', color: '#FF6600' },
-  { value: 'twint', label: 'TWINT', color: '#000000' },
-];
-
-const MIXED_SUB_METHODS: { value: SalePaymentMethod; label: string; icon: React.ComponentType<{ size: number; color: string }> }[] = [
-  { value: 'cash', label: 'Espèces', icon: Banknote },
-  { value: 'card', label: 'CB', icon: CreditCard },
-  { value: 'mobile_wave', label: 'Wave', icon: Smartphone },
-  { value: 'mobile_om', label: 'Orange Money', icon: Smartphone },
-  { value: 'twint', label: 'TWINT', icon: Smartphone },
-];
-
-function isDigitalMethod(method: string): boolean {
-  return ['mobile_wave', 'mobile_om', 'twint', 'mobile'].includes(method);
-}
-
-function getPaymentCategory(method: string): PaymentCategory {
-  if (method === 'cash') return 'cash';
-  if (method === 'card') return 'card';
-  if (method === 'mixed') return 'mixed';
-  return 'digital';
-}
-
-type CinetPayState = {
-  active: boolean;
-  loading: boolean;
-  transactionId: string | null;
-  paymentUrl: string | null;
-};
-
-const DATE_FILTER_KEYS: { value: DateFilter; labelKey: string }[] = [
-  { value: 'today', labelKey: 'dashboard.today' },
-  { value: '7days', labelKey: 'pos.7days' },
-  { value: '30days', labelKey: 'pos.30days' },
-  { value: 'all', labelKey: 'pos.allSales' },
-];
-
-function generateItemId(): string {
-  return `si_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-}
+type CartItem = POSCartItem;
 
 export default function SalesScreen() {
   const { colors } = useTheme();
@@ -251,8 +186,8 @@ export default function SalesScreen() {
   const [saleFormClientId, setSaleFormClientId] = useState('');
   const [saleFormProductSearch, setSaleFormProductSearch] = useState('');
   const [saleFormError, setSaleFormError] = useState('');
-  const [saleFormClientSearch, setSaleFormClientSearch] = useState('');
-  const [saleFormShowClientPicker, setSaleFormShowClientPicker] = useState(false);
+  const [_saleFormClientSearch, _setSaleFormClientSearch] = useState('');
+  const [_saleFormShowClientPicker, _setSaleFormShowClientPicker] = useState(false);
   const [confirmSale, setConfirmSale] = useState<string | null>(null);
 
   const [cinetpay, setCinetpay] = useState<CinetPayState>({
@@ -773,15 +708,15 @@ export default function SalesScreen() {
     ).slice(0, 20);
   }, [saleFormProductSearch, salesProducts]);
 
-  const saleFormFilteredClients = useMemo(() => {
-    if (!saleFormClientSearch) return effectiveClients.slice(0, 10);
-    const q = saleFormClientSearch.toLowerCase();
+  const _saleFormFilteredClients = useMemo(() => {
+    if (!_saleFormClientSearch) return effectiveClients.slice(0, 10);
+    const q = _saleFormClientSearch.toLowerCase();
     return effectiveClients.filter(
       (c) =>
         (c.companyName && c.companyName.toLowerCase().includes(q)) ||
         `${c.firstName} ${c.lastName}`.toLowerCase().includes(q)
     ).slice(0, 10);
-  }, [saleFormClientSearch, effectiveClients]);
+  }, [_saleFormClientSearch, effectiveClients]);
 
   const saleFormTotals = useMemo(() => {
     let totalHT = 0;
@@ -814,8 +749,8 @@ export default function SalesScreen() {
     setSaleFormClientId(sale.clientId || '');
     setSaleFormProductSearch('');
     setSaleFormError('');
-    setSaleFormClientSearch('');
-    setSaleFormShowClientPicker(false);
+    _setSaleFormClientSearch('');
+    _setSaleFormShowClientPicker(false);
     setSaleFormVisible(true);
   }, [sales]);
 
@@ -2102,53 +2037,11 @@ const renderProductGrid = () => (
           <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.danger }}>{saleFormError}</Text>
         </View>
       ) : null}
-      <View style={{ gap: 8 }}>
-        <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.textSecondary }}>Client (optionnel)</Text>
-        <TouchableOpacity
-          style={[s.saleFormClientBtn, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-          onPress={() => setSaleFormShowClientPicker(!saleFormShowClientPicker)}
-        >
-          <UserPlus size={15} color={colors.textSecondary} />
-          <Text style={{ flex: 1, fontSize: 13, color: saleFormClientId ? colors.text : colors.textTertiary }} numberOfLines={1}>
-            {saleFormClientId
-              ? (effectiveClients.find((c) => c.id === saleFormClientId)?.companyName ||
-                (() => { const cl = effectiveClients.find((c) => c.id === saleFormClientId); return cl ? `${cl.firstName} ${cl.lastName}` : 'Client'; })())
-              : 'Sélectionner un client'}
-          </Text>
-          {saleFormClientId ? (
-            <TouchableOpacity onPress={() => { setSaleFormClientId(''); setSaleFormShowClientPicker(false); }} hitSlop={8}>
-              <X size={14} color={colors.danger} />
-            </TouchableOpacity>
-          ) : (
-            <ChevronDown size={14} color={colors.textTertiary} />
-          )}
-        </TouchableOpacity>
-        {saleFormShowClientPicker && (
-          <View style={[s.saleFormDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <TextInput
-              style={[s.saleFormDropdownSearch, { color: colors.text, backgroundColor: colors.inputBg, borderColor: colors.inputBorder }]}
-              placeholder="Rechercher..."
-              placeholderTextColor={colors.textTertiary}
-              value={saleFormClientSearch}
-              onChangeText={setSaleFormClientSearch}
-            />
-            <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
-              {saleFormFilteredClients.map((client) => (
-                <TouchableOpacity
-                  key={client.id}
-                  style={[s.saleFormDropdownItem, { borderBottomColor: colors.borderLight }, client.id === saleFormClientId && { backgroundColor: colors.primaryLight }]}
-                  onPress={() => { setSaleFormClientId(client.id); setSaleFormShowClientPicker(false); setSaleFormClientSearch(''); }}
-                >
-                  <Text style={{ fontSize: 13, color: colors.text }}>
-                    {client.companyName || `${client.firstName} ${client.lastName}`}
-                  </Text>
-                  {client.id === saleFormClientId && <Check size={14} color={colors.primary} />}
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        )}
-      </View>
+      <ClientPicker
+        selectedClientId={saleFormClientId}
+        onSelect={setSaleFormClientId}
+        label="Client (optionnel)"
+      />
       <View style={{ gap: 8 }}>
         <Text style={{ fontSize: 13, fontWeight: '500' as const, color: colors.textSecondary }}>Moyen de paiement</Text>
         <View style={{ flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 6 }}>
@@ -2576,172 +2469,3 @@ const renderProductGrid = () => (
   );
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1 },
-  tabs: { flexDirection: 'row' as const, borderBottomWidth: 1, paddingHorizontal: 24 },
-  tab: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingVertical: 12, paddingHorizontal: 16, gap: 6, marginBottom: -1 },
-
-  splitLayout: { flex: 1, flexDirection: 'row' as const },
-  cartPanel: { width: '32%' as unknown as number, minWidth: 280, borderLeftWidth: 1, flexDirection: 'column' as const },
-  productsPanel: { flex: 1 },
-
-  productsSection: { flex: 1, paddingHorizontal: 12, paddingTop: 4, gap: 0 },
-  posSearchRow: { flexDirection: 'row' as const, alignItems: 'center' as const, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, gap: 8, marginBottom: 2 },
-  posSearchInput: { flex: 1, fontSize: 14, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-
-  categoryTabs: { flexDirection: 'row' as const, gap: 5, paddingBottom: 0, paddingHorizontal: 1 },
-  categoryTab: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 16, borderWidth: 1, height: 28, justifyContent: 'center' as const },
-  categoryTabText: { fontSize: 11, fontWeight: '600' as const },
-
-  quickActions: { flexDirection: 'row' as const, gap: 6, marginTop: 2, marginBottom: 0 },
-  quickBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 5, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
-  quickBtnText: { fontSize: 12, fontWeight: '600' as const },
-  barcodeRow: { flex: 1, flexDirection: 'row' as const, alignItems: 'center' as const, borderWidth: 1, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 5, gap: 5 },
-  barcodeInput: { flex: 1, fontSize: 13, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  barcodeOkBtn: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
-
-  productGridContent: { paddingBottom: 80, gap: 0, paddingTop: 4 },
-  gridWrap: { 
-  flexDirection: 'row' as const, 
-  flexWrap: 'wrap' as const, 
-  gap: 8, 
-  marginBottom: 4,
-  alignItems: 'flex-start' as const,  // ← Ajouter cette ligne
-},
-  productTile: { borderRadius: 12, overflow: 'hidden' as const, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
-  tileImage: { width: '100%' as unknown as number, height: 56 },
-  tileImageLarge: { width: '100%' as unknown as number, height: 80 },
-  tilePlaceholder: { width: '100%' as unknown as number, height: 44, alignItems: 'center' as const, justifyContent: 'center' as const },
-  tilePlaceholderLarge: { width: '100%' as unknown as number, height: 64, alignItems: 'center' as const, justifyContent: 'center' as const },
-
-  viewToggle: { flexDirection: 'row' as const, gap: 2, marginLeft: 4 },
-  viewToggleBtn: { width: 28, height: 28, alignItems: 'center' as const, justifyContent: 'center' as const, borderRadius: 6 },
-
-  categoryGroupHeader: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginTop: 6, marginBottom: 4 },
-  categoryGroupHeaderText: { fontSize: 12, fontWeight: '700' as const, flex: 1 },
-  categoryGroupHeaderCount: { fontSize: 11, fontWeight: '500' as const },
-
-  listContainer: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' as const, marginBottom: 4 },
-  listRow: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 10, gap: 10, borderBottomWidth: 1 },
-  listThumb: { width: 38, height: 38, borderRadius: 8 },
-  listThumbPlaceholder: { width: 38, height: 38, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const },
-  listName: { fontSize: 13, fontWeight: '600' as const },
-  listPrice: { fontSize: 13, fontWeight: '800' as const },
-  listStock: { fontSize: 11, fontWeight: '500' as const, minWidth: 30, textAlign: 'right' as const },
-  tileOutOfStock: { opacity: 0.45 },
-  tileRuptureBadge: { position: 'absolute' as const, top: 4, right: 4, backgroundColor: '#DC2626', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  tileRuptureBadgeText: { color: '#FFF', fontSize: 8, fontWeight: '700' as const, letterSpacing: 0.3 },
-  tileCartBadge: { position: 'absolute' as const, top: 6, right: 6, backgroundColor: '#3B82F6', width: 22, height: 22, borderRadius: 11, alignItems: 'center' as const, justifyContent: 'center' as const },
-  tileCartBadgeText: { color: '#FFF', fontSize: 11, fontWeight: '700' as const },
-  tileVariantBadge: { position: 'absolute' as const, top: 6, left: 6, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 2, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8 },
-  tileBody: { padding: 6, gap: 1 },
-  tileName: { fontSize: 11, fontWeight: '600' as const, lineHeight: 15 },
-  tileFooter: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'flex-end' as const, marginTop: 2 },
-  tilePrice: { fontSize: 15, fontWeight: '800' as const },
-  tileStockSmall: { fontSize: 9, fontWeight: '500' as const },
-
-  cartHeader: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 8 },
-  cartHeaderLeft: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 },
-  cartTitle: { fontSize: 16, fontWeight: '700' as const },
-  clientSelector: { flexDirection: 'row' as const, alignItems: 'center' as const, marginHorizontal: 12, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, gap: 6, marginBottom: 4 },
-  clientSelectorText: { flex: 1, fontSize: 13 },
-  clientDropdown: { marginHorizontal: 16, borderRadius: 10, borderWidth: 1, maxHeight: 200, marginBottom: 6, overflow: 'hidden' as const },
-  clientDropdownSearch: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, borderBottomWidth: 1, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  clientDropdownItem: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, gap: 8 },
-
-  cartList: { flex: 1, paddingHorizontal: 12 },
-  cartEmpty: { alignItems: 'center' as const, paddingVertical: 40, gap: 8 },
-  cartEmptyText: { fontSize: 14, fontWeight: '500' as const },
-  cartEmptyHint: { fontSize: 12 },
-  cartItem: { paddingVertical: 12, borderBottomWidth: 1 },
-  cartItemTop: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, marginBottom: 8 },
-  cartItemName: { fontSize: 13, fontWeight: '600' as const, flex: 1, marginRight: 8 },
-  cartItemBottom: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const },
-  qtyControl: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 10 },
-  qtyBtn: { width: 30, height: 30, borderRadius: 8, borderWidth: 1, alignItems: 'center' as const, justifyContent: 'center' as const },
-  qtyText: { fontSize: 16, fontWeight: '700' as const, minWidth: 24, textAlign: 'center' as const },
-  cartItemTotal: { fontSize: 15, fontWeight: '700' as const },
-
-  cartFooter: { borderTopWidth: 1, padding: 12 },
-  totalsBlock: { marginBottom: 10 },
-  totalRow: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginBottom: 2 },
-
-  payBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, paddingVertical: 14, borderRadius: 12, gap: 8 },
-  payBtnText: { color: '#FFF', fontSize: 16, fontWeight: '800' as const, letterSpacing: 1 },
-
-  receiptBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, paddingVertical: 10, borderRadius: 8, borderWidth: 1, gap: 6, marginTop: 8 },
-  receiptBtnText: { fontSize: 13, fontWeight: '600' as const },
-
-  floatingCartBtn: { position: 'absolute' as const, bottom: 20, right: 20, left: 20, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, paddingVertical: 16, borderRadius: 16, gap: 10, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.2, shadowRadius: 12, elevation: 8 },
-  floatingCartBadge: { backgroundColor: '#FFF', width: 24, height: 24, borderRadius: 12, alignItems: 'center' as const, justifyContent: 'center' as const },
-  floatingCartBadgeText: { fontSize: 13, fontWeight: '800' as const, color: '#3B82F6' },
-  floatingCartTotal: { color: '#FFF', fontSize: 17, fontWeight: '700' as const },
-
-  bottomSheetOverlay: { flex: 1, justifyContent: 'flex-end' as const },
-  bottomSheetBackdrop: { position: 'absolute' as const, top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
-  bottomSheet: { maxHeight: '85%' as unknown as number, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 8 },
-  bottomSheetHandle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center' as const, marginBottom: 8 },
-
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center' as const, alignItems: 'center' as const },
-  paymentModal: { borderRadius: 16, maxHeight: '90%' as unknown as number, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.18, shadowRadius: 24, elevation: 12, overflow: 'hidden' as const },
-  paymentModalHeader: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, padding: 20, borderBottomWidth: 1 },
-  paymentModalTitle: { fontSize: 18, fontWeight: '700' as const },
-  paymentModalFooter: { padding: 20, borderTopWidth: 1 },
-
-  paymentRecap: { padding: 16, borderRadius: 12, borderWidth: 1, gap: 4 },
-  paymentGrid: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 10 },
-  paymentMethodBtn: { width: '30%' as unknown as number, flexGrow: 1, alignItems: 'center' as const, justifyContent: 'center' as const, paddingVertical: 14, borderRadius: 12, borderWidth: 1.5 },
-  paymentClientBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1, gap: 8 },
-
-  cashCalcSection: { padding: 16, borderRadius: 12, borderWidth: 1 },
-  cashInput: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 16, fontWeight: '600' as const, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  cardConfirmBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, padding: 14, borderRadius: 12, borderWidth: 1.5, gap: 12 },
-  cardConfirmCheckbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: 'center' as const, justifyContent: 'center' as const },
-  cashQuickBtns: { flexDirection: 'row' as const, gap: 8 },
-  cashQuickBtn: { flex: 1, alignItems: 'center' as const, paddingVertical: 10, borderRadius: 8, borderWidth: 1 },
-  changeDisplay: { padding: 16, borderRadius: 10, alignItems: 'center' as const, gap: 4 },
-
-  validateSaleBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, paddingVertical: 16, borderRadius: 14, gap: 10 },
-  validateSaleBtnText: { color: '#FFF', fontSize: 16, fontWeight: '700' as const },
-
-  vatChip: { flex: 1, alignItems: 'center' as const, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
-
-  variantModal: { borderRadius: 16, maxHeight: '80%' as unknown as number, overflow: 'hidden' as const },
-  variantOption: { borderRadius: 12, padding: 16, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, gap: 12 },
-
-  historyContainer: { padding: 20, gap: 16 },
-  filterRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 12, flexWrap: 'wrap' as const },
-  historySearchBar: { flex: 1, minWidth: 200, flexDirection: 'row' as const, alignItems: 'center' as const, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
-  dateFilters: { flexDirection: 'row' as const, gap: 6 },
-  dateFilterBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
-  salesTable: { borderRadius: 12, borderWidth: 1, overflow: 'hidden' as const, maxHeight: 600 },
-  tableHeader: { flexDirection: 'row' as const, paddingVertical: 10, paddingHorizontal: 16, borderBottomWidth: 1 },
-  thCell: { fontSize: 11, fontWeight: '600' as const, textTransform: 'uppercase' as const, letterSpacing: 0.5, color: '#6B7280' },
-  historyRow: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1 },
-  mobileCard: { padding: 14, borderBottomWidth: 1 },
-  saleDetail: { padding: 16, borderBottomWidth: 1 },
-  actionBtn: { width: 28, height: 28, borderRadius: 6, alignItems: 'center' as const, justifyContent: 'center' as const },
-  mobileActionBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, gap: 6 },
-
-  emptyState: { alignItems: 'center' as const, paddingVertical: 40, gap: 8 },
-
-  saleFormError: { padding: 12, borderRadius: 8 },
-  saleFormClientBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, borderWidth: 1, gap: 8 },
-  saleFormDropdown: { borderRadius: 10, borderWidth: 1, maxHeight: 200, overflow: 'hidden' as const },
-  saleFormDropdownSearch: { paddingHorizontal: 12, paddingVertical: 8, fontSize: 13, borderBottomWidth: 1, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  saleFormDropdownItem: { flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, paddingHorizontal: 12, paddingVertical: 10, borderBottomWidth: 1, gap: 8 },
-  saleFormPaymentBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, borderWidth: 1, gap: 6 },
-  saleFormProductSearch: { flexDirection: 'row' as const, alignItems: 'center' as const, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9, gap: 8 },
-  saleFormProductInput: { flex: 1, fontSize: 13, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  saleFormItem: { borderWidth: 1, borderRadius: 10, padding: 12 },
-  saleFormQtyBtn: { width: 26, height: 26, borderRadius: 6, borderWidth: 1, alignItems: 'center' as const, justifyContent: 'center' as const },
-
-  assignOverlay: { position: 'absolute' as const, top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center' as const, alignItems: 'center' as const, zIndex: 1000 },
-  assignModal: { width: 340, maxHeight: 420, borderRadius: 14, borderWidth: 1, overflow: 'hidden' as const },
-  assignSearch: { marginHorizontal: 16, marginVertical: 12, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8, borderWidth: 1, fontSize: 13, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as never } : {}) },
-  assignItem: { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const, paddingVertical: 10, paddingHorizontal: 4, borderBottomWidth: 1 },
-  assignBtn: { margin: 16, paddingVertical: 12, borderRadius: 10, alignItems: 'center' as const },
-  mixedMethodChip: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, gap: 4 },
-  expandedVariantRow: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 12, paddingVertical: 8, borderBottomWidth: 1, gap: 12, flexWrap: 'nowrap' as const },
-  cinetpayBtn: { flexDirection: 'row' as const, alignItems: 'center' as const, paddingVertical: 14, paddingHorizontal: 16, borderRadius: 12, gap: 12 },
-});

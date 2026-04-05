@@ -9,7 +9,7 @@
 
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
-import Svg, { Polyline, Defs, LinearGradient, Stop, Polygon } from 'react-native-svg';
+import Svg, { Polyline, Defs, LinearGradient, Stop, Polygon, Circle, Path } from 'react-native-svg';
 
 interface SparklineChartProps {
   data: number[];
@@ -18,6 +18,8 @@ interface SparklineChartProps {
   height?: number;
   strokeWidth?: number;
   showArea?: boolean;
+  showEndDot?: boolean;
+  smooth?: boolean;
 }
 
 function SparklineChart({
@@ -27,52 +29,58 @@ function SparklineChart({
   height = 28,
   strokeWidth = 1.5,
   showArea = true,
+  showEndDot = false,
+  smooth = false,
 }: SparklineChartProps) {
-  const points = useMemo(() => {
-    if (data.length < 2) return '';
+  const coords = useMemo(() => {
+    if (data.length < 2) return [];
     const max = Math.max(...data);
     const min = Math.min(...data);
     const range = max - min || 1;
-    const padding = 2;
+    const padding = showEndDot ? 4 : 2;
     const usableW = width - padding * 2;
     const usableH = height - padding * 2;
     const step = usableW / (data.length - 1);
+    return data.map((val, i) => ({
+      x: padding + i * step,
+      y: padding + usableH - ((val - min) / range) * usableH,
+    }));
+  }, [data, width, height, showEndDot]);
 
-    return data
-      .map((val, i) => {
-        const x = padding + i * step;
-        const y = padding + usableH - ((val - min) / range) * usableH;
-        return `${x},${y}`;
-      })
-      .join(' ');
-  }, [data, width, height]);
+  const points = useMemo(() => {
+    if (coords.length < 2) return '';
+    return coords.map(c => `${c.x},${c.y}`).join(' ');
+  }, [coords]);
+
+  const smoothPath = useMemo(() => {
+    if (!smooth || coords.length < 2) return '';
+    let d = `M ${coords[0].x} ${coords[0].y}`;
+    for (let i = 1; i < coords.length; i++) {
+      const cpX = (coords[i - 1].x + coords[i].x) / 2;
+      d += ` C ${cpX} ${coords[i - 1].y} ${cpX} ${coords[i].y} ${coords[i].x} ${coords[i].y}`;
+    }
+    return d;
+  }, [smooth, coords]);
+
+  const smoothAreaPath = useMemo(() => {
+    if (!smooth || coords.length < 2 || !showArea) return '';
+    const last = coords[coords.length - 1];
+    const first = coords[0];
+    return `${smoothPath} L ${last.x} ${height} L ${first.x} ${height} Z`;
+  }, [smooth, coords, showArea, smoothPath, height]);
 
   const areaPoints = useMemo(() => {
-    if (data.length < 2 || !showArea) return '';
-    const max = Math.max(...data);
-    const min = Math.min(...data);
-    const range = max - min || 1;
-    const padding = 2;
-    const usableW = width - padding * 2;
-    const usableH = height - padding * 2;
-    const step = usableW / (data.length - 1);
-
-    const linePoints = data.map((val, i) => {
-      const x = padding + i * step;
-      const y = padding + usableH - ((val - min) / range) * usableH;
-      return `${x},${y}`;
-    });
-
-    const lastX = padding + (data.length - 1) * step;
-    const firstX = padding;
-    const bottomY = height;
-
-    return `${linePoints.join(' ')} ${lastX},${bottomY} ${firstX},${bottomY}`;
-  }, [data, width, height, showArea]);
+    if (smooth || coords.length < 2 || !showArea) return '';
+    const linePoints = coords.map(c => `${c.x},${c.y}`);
+    const lastX = coords[coords.length - 1].x;
+    const firstX = coords[0].x;
+    return `${linePoints.join(' ')} ${lastX},${height} ${firstX},${height}`;
+  }, [smooth, coords, showArea, height]);
 
   if (data.length < 2) return null;
 
-  const gradientId = `spark-${color.replace('#', '')}`;
+  const gradientId = `spark-${color.replace(/[^a-zA-Z0-9]/g, '')}-${width}`;
+  const lastCoord = coords[coords.length - 1];
 
   return (
     <View style={{ width, height }}>
@@ -83,20 +91,37 @@ function SparklineChart({
             <Stop offset="100%" stopColor={color} stopOpacity={0.02} />
           </LinearGradient>
         </Defs>
-        {showArea && areaPoints && (
-          <Polygon
-            points={areaPoints}
-            fill={`url(#${gradientId})`}
+        {showArea && smooth && smoothAreaPath ? (
+          <Path d={smoothAreaPath} fill={`url(#${gradientId})`} />
+        ) : null}
+        {showArea && !smooth && areaPoints ? (
+          <Polygon points={areaPoints} fill={`url(#${gradientId})`} />
+        ) : null}
+        {smooth && smoothPath ? (
+          <Path
+            d={smoothPath}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ) : (
+          <Polyline
+            points={points}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         )}
-        <Polyline
-          points={points}
-          fill="none"
-          stroke={color}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        {showEndDot && lastCoord && (
+          <>
+            <Circle cx={lastCoord.x} cy={lastCoord.y} r={3.5} fill={color} opacity={0.2} />
+            <Circle cx={lastCoord.x} cy={lastCoord.y} r={2} fill={color} />
+          </>
+        )}
       </Svg>
     </View>
   );

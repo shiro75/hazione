@@ -14,6 +14,9 @@ import AccessDenied from '@/components/AccessDenied';
 import { formatCurrency, formatDate, generateFECExport } from '@/utils/format';
 import PageHeader from '@/components/PageHeader';
 import { useConfirm } from '@/contexts/ConfirmContext';
+import useChartState from '@/hooks/useChartState';
+import EmptyState from '@/components/EmptyState';
+import CompactSummaryCard from '@/components/CompactSummaryCard';
 
 type CashTab = 'overview' | 'movements' | 'journals';
 type MovementFilter = 'all' | 'income' | 'expense';
@@ -254,7 +257,16 @@ export default function CashFlowScreen() {
     [unpaidInvoices]
   );
 
-  const hasData = paidInvoices.length > 0 || paidSupplierInvoices.length > 0 || salesNotFromInvoices.length > 0;
+  const _hasData = paidInvoices.length > 0 || paidSupplierInvoices.length > 0 || salesNotFromInvoices.length > 0;
+
+  const cashflowChartValues = useMemo(() => monthlyData.map(d => ({ value: d.encaissements + d.decaissements })), [monthlyData]);
+  const cashflowChartState = useChartState(cashflowChartValues);
+  const cashflowMaxDynamic = useMemo(() => maxChartValue * 1.2, [maxChartValue]);
+  const cashflowAvg = useMemo(() => {
+    const nonZero = monthlyData.filter(d => d.encaissements + d.decaissements > 0);
+    return nonZero.length > 0 ? nonZero.reduce((s, d) => s + d.encaissements + d.decaissements, 0) / nonZero.length / 2 : 0;
+  }, [monthlyData]);
+  const cashflowAvgPct = cashflowMaxDynamic > 0 && cashflowAvg > 0 ? (cashflowAvg / cashflowMaxDynamic) * 100 : 0;
 
   const handleExportFEC = useCallback(async () => {
     try {
@@ -413,38 +425,61 @@ export default function CashFlowScreen() {
                 <Text style={[styles.chartTitle, { color: colors.text }]}>Flux sur 6 mois</Text>
                 <Text style={[styles.chartSubtitle, { color: colors.textSecondary }]}>Encaissements vs Décaissements</Text>
               </View>
-              {!hasData ? (
-                <View style={styles.chartEmpty}>
-                  <Text style={[styles.chartEmptyText, { color: colors.textTertiary }]}>Pas de données pour cette période</Text>
-                </View>
+              {cashflowChartState.isEmpty ? (
+                <EmptyState title="Pas de données" description="Les flux de trésorerie apparaîtront après vos premières transactions." illustration="chart" />
+              ) : cashflowChartState.isSparse ? (
+                <CompactSummaryCard
+                  total={solde}
+                  totalLabel="Flux net"
+                  unit={cur}
+                  message="Pas assez de mois avec des flux pour afficher un graphique complet"
+                  insight={`${cashflowChartState.nonEmptyCount} mois avec des mouvements`}
+                />
               ) : (
                 <>
-                  <View style={styles.barChart}>
-                    {monthlyData.map((item) => (
-                      <View key={item.month} style={styles.barGroup}>
-                        <View style={styles.barContainer}>
-                          <View
-                            style={[
-                              styles.barExpense,
-                              {
-                                height: `${(item.decaissements / maxChartValue) * 100}%` as never,
-                                backgroundColor: colors.danger + '40',
-                              },
-                            ]}
-                          />
-                          <View
-                            style={[
-                              styles.barRevenue,
-                              {
-                                height: `${(item.encaissements / maxChartValue) * 100}%` as never,
-                                backgroundColor: colors.success,
-                              },
-                            ]}
-                          />
+                  <View style={[styles.barChart, { position: 'relative' as const }]}>
+                    {cashflowAvgPct > 0 && (
+                      <View style={{
+                        position: 'absolute', left: 0, right: 0, bottom: `${cashflowAvgPct}%` as never,
+                        borderBottomWidth: 1.2, borderBottomColor: colors.success, borderStyle: 'dashed', opacity: 0.3, zIndex: 1,
+                      }} />
+                    )}
+                    {monthlyData.map((item) => {
+                      const ghostH = 8;
+                      return (
+                        <View key={item.month} style={styles.barGroup}>
+                          <View style={styles.barContainer}>
+                            {item.decaissements > 0 ? (
+                              <View
+                                style={[
+                                  styles.barExpense,
+                                  {
+                                    height: `${(item.decaissements / cashflowMaxDynamic) * 100}%` as never,
+                                    backgroundColor: colors.danger + '40',
+                                  },
+                                ]}
+                              />
+                            ) : (
+                              <View style={[styles.barExpense, { height: ghostH, backgroundColor: '#D1D5DB', opacity: 0.3 }]} />
+                            )}
+                            {item.encaissements > 0 ? (
+                              <View
+                                style={[
+                                  styles.barRevenue,
+                                  {
+                                    height: `${(item.encaissements / cashflowMaxDynamic) * 100}%` as never,
+                                    backgroundColor: colors.success,
+                                  },
+                                ]}
+                              />
+                            ) : (
+                              <View style={[styles.barRevenue, { height: ghostH, backgroundColor: '#D1D5DB', opacity: 0.3 }]} />
+                            )}
+                          </View>
+                          <Text style={[styles.barLabel, { color: colors.textTertiary }]}>{item.month}</Text>
                         </View>
-                        <Text style={[styles.barLabel, { color: colors.textTertiary }]}>{item.month}</Text>
-                      </View>
-                    ))}
+                      );
+                    })}
                   </View>
                   <View style={styles.legend}>
                     <View style={styles.legendItem}>

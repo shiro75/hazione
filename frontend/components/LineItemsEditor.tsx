@@ -1,14 +1,15 @@
 /**
  * @fileoverview Line items editor for invoices, quotes, and orders.
  * Allows searching products, adding/removing lines, editing quantities and prices.
+ * Supports product variant expansion and selection.
  */
 import React, { useState, useCallback } from 'react';
 import { View, Text, ScrollView, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
-import { Search, Plus, X, Minus, ChevronDown, Check } from 'lucide-react-native';
+import { Search, Plus, X, Minus, ChevronDown, ChevronRight, Check } from 'lucide-react-native';
 import { useTheme } from '@/contexts/ThemeContext';
 import { useData } from '@/contexts/DataContext';
 import { formatCurrency } from '@/utils/format';
-import type { VATRate, ProductType } from '@/types';
+import type { VATRate, ProductType, Product, ProductVariant } from '@/types';
 
 export interface LineItem {
   id: string;
@@ -21,6 +22,8 @@ export interface LineItem {
   totalHT: number;
   totalTVA: number;
   totalTTC: number;
+  variantId?: string;
+  variantInfo?: Record<string, string>;
 }
 
 interface LineItemsEditorProps {
@@ -47,10 +50,16 @@ function recalcLine(item: LineItem): LineItem {
 
 export default React.memo(function LineItemsEditor({ items, onItemsChange, idPrefix = 'li', showDiscount = false, currency, allowedProductTypes, defaultDiscount = 0 }: LineItemsEditorProps) {
   const { colors } = useTheme();
-  const { activeProducts, company } = useData();
+  const { activeProducts, company, variants } = useData();
   const cur = currency || company.currency || 'EUR';
   const [openDropdownIdx, setOpenDropdownIdx] = useState<number | null>(null);
   const [lineSearches, setLineSearches] = useState<Record<number, string>>({});
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+
+  const getProductVariants = useCallback((productId: string): ProductVariant[] => {
+    if (!variants) return [];
+    return variants.filter((v: ProductVariant) => v.productId === productId && v.isActive);
+  }, [variants]);
 
   const getFilteredProducts = useCallback((idx: number) => {
     let base = activeProducts.filter((p) => p.isAvailableForSale !== false);
@@ -81,22 +90,30 @@ export default React.memo(function LineItemsEditor({ items, onItemsChange, idPre
     setOpenDropdownIdx(items.length);
   }, [items, onItemsChange, idPrefix, defaultDiscount]);
 
-  const selectProduct = useCallback((idx: number, productId: string) => {
+  const selectProduct = useCallback((idx: number, productId: string, variant?: ProductVariant) => {
     const product = activeProducts.find((p) => p.id === productId);
     if (!product) return;
+    const price = variant ? variant.salePrice : product.salePrice;
+    const variantAttrs = variant?.attributes || {};
+    const variantLabel = variant
+      ? Object.values(variantAttrs).join(' / ')
+      : '';
     onItemsChange(items.map((item, i) => {
       if (i !== idx) return item;
       const disc = item.discount || defaultDiscount;
       return recalcLine({
         ...item,
         productId: product.id,
-        productName: product.name,
-        unitPrice: product.salePrice,
+        productName: variant ? `${product.name} — ${variantLabel}` : product.name,
+        unitPrice: price,
         vatRate: product.vatRate,
         discount: disc,
+        variantId: variant?.id,
+        variantInfo: variant ? variantAttrs : undefined,
       });
     }));
     setOpenDropdownIdx(null);
+    setExpandedProductId(null);
     setLineSearches((prev) => ({ ...prev, [idx]: '' }));
   }, [activeProducts, items, onItemsChange, defaultDiscount]);
 
@@ -123,6 +140,71 @@ export default React.memo(function LineItemsEditor({ items, onItemsChange, idPre
     onItemsChange(items.filter((_, i) => i !== idx));
     if (openDropdownIdx === idx) setOpenDropdownIdx(null);
   }, [items, onItemsChange, openDropdownIdx]);
+
+  const renderProductDropdownItem = useCallback((p: Product, idx: number, isSelected: boolean) => {
+    const productVariants = getProductVariants(p.id);
+    const hasVariants = productVariants.length > 0;
+    const isExpanded = expandedProductId === p.id;
+
+    return (
+      <View key={p.id}>
+        <TouchableOpacity
+          style={[
+            lineStyles.dropdownItem,
+            { borderBottomColor: colors.borderLight },
+            isSelected && { backgroundColor: colors.primaryLight },
+          ]}
+          onPress={() => {
+            if (hasVariants) {
+              setExpandedProductId(isExpanded ? null : p.id);
+            } else {
+              selectProduct(idx, p.id);
+            }
+          }}
+        >
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4 }}>
+              {hasVariants ? (
+                isExpanded ? <ChevronDown size={12} color={colors.textTertiary} /> : <ChevronRight size={12} color={colors.textTertiary} />
+              ) : null}
+              <Text style={[lineStyles.dropdownItemName, { color: colors.text }]}>{p.name}</Text>
+              {hasVariants ? (
+                <View style={[lineStyles.variantBadge, { backgroundColor: colors.primaryLight }]}>
+                  <Text style={[lineStyles.variantBadgeText, { color: colors.primary }]}>{productVariants.length} variante{productVariants.length > 1 ? 's' : ''}</Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[lineStyles.dropdownItemSku, { color: colors.textTertiary }]}>
+              {p.sku || 'Sans réf.'} · {formatCurrency(p.salePrice * (1 + p.vatRate / 100), cur)} TTC
+            </Text>
+          </View>
+          {isSelected && !hasVariants && <Check size={14} color={colors.primary} />}
+        </TouchableOpacity>
+        {hasVariants && isExpanded ? (
+          <View style={{ backgroundColor: colors.surfaceHover || colors.inputBg }}>
+            {productVariants.map((v) => {
+              const attrLabel = Object.values(v.attributes).join(' / ');
+              return (
+                <TouchableOpacity
+                  key={v.id}
+                  style={[lineStyles.variantItem, { borderBottomColor: colors.borderLight }]}
+                  onPress={() => selectProduct(idx, p.id, v)}
+                >
+                  <View style={{ flex: 1, paddingLeft: 24 }}>
+                    <Text style={[lineStyles.dropdownItemName, { color: colors.text }]}>{attrLabel}</Text>
+                    <Text style={[lineStyles.dropdownItemSku, { color: colors.textTertiary }]}>
+                      {v.sku || 'Sans réf.'} · {formatCurrency(v.salePrice * (1 + (activeProducts.find(pp => pp.id === v.productId)?.vatRate || 20) / 100), cur)} TTC · Stock: {v.stockQuantity}
+                    </Text>
+                  </View>
+                  <Check size={14} color="transparent" />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : null}
+      </View>
+    );
+  }, [getProductVariants, expandedProductId, colors, cur, selectProduct, activeProducts]);
 
   return (
     <View style={lineStyles.container}>
@@ -154,7 +236,7 @@ export default React.memo(function LineItemsEditor({ items, onItemsChange, idPre
                       borderColor: item.productId ? colors.primary : colors.inputBorder,
                     },
                   ]}
-                  onPress={() => setOpenDropdownIdx(isDropdownOpen ? null : idx)}
+                  onPress={() => { setOpenDropdownIdx(isDropdownOpen ? null : idx); setExpandedProductId(null); }}
                   activeOpacity={0.7}
                 >
                   <Text
@@ -184,25 +266,7 @@ export default React.memo(function LineItemsEditor({ items, onItemsChange, idPre
                       )}
                     </View>
                     <ScrollView style={lineStyles.dropdownList} nestedScrollEnabled>
-                      {filteredProducts.map((p) => (
-                        <TouchableOpacity
-                          key={p.id}
-                          style={[
-                            lineStyles.dropdownItem,
-                            { borderBottomColor: colors.borderLight },
-                            item.productId === p.id && { backgroundColor: colors.primaryLight },
-                          ]}
-                          onPress={() => selectProduct(idx, p.id)}
-                        >
-                          <View style={{ flex: 1 }}>
-                            <Text style={[lineStyles.dropdownItemName, { color: colors.text }]}>{p.name}</Text>
-                            <Text style={[lineStyles.dropdownItemSku, { color: colors.textTertiary }]}>
-                              {p.sku || 'Sans réf.'} · {formatCurrency(p.salePrice, cur)}
-                            </Text>
-                          </View>
-                          {item.productId === p.id && <Check size={14} color={colors.primary} />}
-                        </TouchableOpacity>
-                      ))}
+                      {filteredProducts.map((p) => renderProductDropdownItem(p, idx, item.productId === p.id))}
                       {filteredProducts.length === 0 && (
                         <Text style={[lineStyles.dropdownEmpty, { color: colors.textTertiary }]}>Aucun produit trouvé</Text>
                       )}
@@ -301,14 +365,14 @@ const lineStyles = StyleSheet.create({
   dropdown: {
     borderWidth: 1, borderRadius: 8, marginTop: 4, overflow: 'hidden' as const,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 6,
-    maxHeight: 220,
+    maxHeight: 280,
   },
   dropdownSearchRow: {
     flexDirection: 'row' as const, alignItems: 'center' as const,
     gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 1,
   },
   dropdownSearchInput: { flex: 1, fontSize: 13, outlineStyle: 'none' as never },
-  dropdownList: { maxHeight: 170 },
+  dropdownList: { maxHeight: 230 },
   dropdownItem: {
     flexDirection: 'row' as const, alignItems: 'center' as const,
     paddingHorizontal: 10, paddingVertical: 9, borderBottomWidth: 1,
@@ -316,6 +380,14 @@ const lineStyles = StyleSheet.create({
   dropdownItemName: { fontSize: 13, fontWeight: '500' as const },
   dropdownItemSku: { fontSize: 11, marginTop: 1 },
   dropdownEmpty: { padding: 14, textAlign: 'center' as const, fontSize: 13 },
+  variantBadge: {
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 4,
+  },
+  variantBadgeText: { fontSize: 10, fontWeight: '600' as const },
+  variantItem: {
+    flexDirection: 'row' as const, alignItems: 'center' as const,
+    paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 1,
+  },
   lineBottom: {
     flexDirection: 'row' as const, justifyContent: 'space-between' as const,
     alignItems: 'center' as const,

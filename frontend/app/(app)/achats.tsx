@@ -14,7 +14,7 @@ import * as ImagePicker from 'expo-image-picker';
 import {
   Search, Plus, Truck, FileText, ShoppingCart, X, Trash2,
   Check, ArrowRight, PackageCheck, Clock, ChevronDown, ChevronUp, Upload, Download, ArrowUpDown, Paperclip, UserPlus, Ban, Copy,
-  Receipt,
+  Receipt, CreditCard,
 } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/contexts/ThemeContext';
@@ -602,12 +602,155 @@ const suppHistStyles = StyleSheet.create({
   eventDate: { fontSize: 11, marginTop: 1 },
 });
 
+function QuickDropdown({ options, selectedValue, onSelect, isOpen, onToggle, colors, placeholder, allowCustom, customValue, onCustomChange }: {
+  options: { value: string; label: string }[];
+  selectedValue: string;
+  onSelect: (value: string) => void;
+  isOpen: boolean;
+  onToggle: () => void;
+  colors: any;
+  placeholder?: string;
+  allowCustom?: boolean;
+  customValue?: string;
+  onCustomChange?: (v: string) => void;
+}) {
+  const selectedLabel = options.find(o => o.value === selectedValue)?.label || (allowCustom && customValue ? customValue : '');
+  return (
+    <View style={{ gap: 4 }}>
+      <TouchableOpacity
+        style={[styles.productSelectBtn, { backgroundColor: colors.inputBg, borderColor: selectedValue ? colors.primary : colors.inputBorder }]}
+        onPress={onToggle}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.productSelectText, { color: selectedLabel ? colors.text : colors.textTertiary }]} numberOfLines={1}>
+          {selectedLabel || placeholder || 'Sélectionner...'}
+        </Text>
+        <ChevronDown size={14} color={colors.textTertiary} />
+      </TouchableOpacity>
+      {isOpen ? (
+        <View style={[styles.productDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          {allowCustom ? (
+            <View style={[styles.productDropdownSearch, { borderBottomColor: colors.borderLight }]}>
+              <Search size={14} color={colors.textTertiary} />
+              <TextInput
+                style={[styles.productDropdownSearchInput, { color: colors.text }]}
+                placeholder="Saisir ou sélectionner..."
+                placeholderTextColor={colors.textTertiary}
+                value={customValue || ''}
+                onChangeText={onCustomChange}
+              />
+            </View>
+          ) : null}
+          <ScrollView style={{ maxHeight: 180 }} nestedScrollEnabled>
+            {options.map((opt) => (
+              <TouchableOpacity
+                key={opt.value}
+                style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight }, selectedValue === opt.value && { backgroundColor: colors.primaryLight }]}
+                onPress={() => onSelect(opt.value)}
+              >
+                <Text style={[styles.productDropdownName, { color: colors.text }]}>{opt.label}</Text>
+                {selectedValue === opt.value ? <Check size={14} color={colors.primary} /> : null}
+              </TouchableOpacity>
+            ))}
+            {options.length === 0 ? (
+              <Text style={[styles.productDropdownEmpty, { color: colors.textTertiary }]}>Aucune option</Text>
+            ) : null}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function SupplierDropdown({ suppliers, selectedId, onSelect, colors, onCreateSupplier }: { suppliers: Supplier[]; selectedId: string; onSelect: (id: string) => void; colors: any; onCreateSupplier?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const selectedName = suppliers.find(s => s.id === selectedId)?.companyName || '';
+  const filtered = search
+    ? suppliers.filter(s => s.companyName.toLowerCase().includes(search.toLowerCase())).slice(0, 20)
+    : suppliers.slice(0, 20);
+  return (
+    <View style={{ gap: 4 }}>
+      <TouchableOpacity
+        style={[styles.productSelectBtn, { backgroundColor: colors.inputBg, borderColor: selectedId ? colors.primary : colors.inputBorder }]}
+        onPress={() => setOpen(!open)}
+        activeOpacity={0.7}
+      >
+        <Truck size={15} color={colors.textSecondary} />
+        <Text style={[styles.productSelectText, { color: selectedId ? colors.text : colors.textTertiary }]} numberOfLines={1}>
+          {selectedName || 'Sélectionner un fournisseur...'}
+        </Text>
+        {selectedId ? (
+          <TouchableOpacity onPress={() => { onSelect(''); setOpen(false); }} hitSlop={8}>
+            <X size={14} color={colors.danger} />
+          </TouchableOpacity>
+        ) : (
+          <ChevronDown size={14} color={colors.textTertiary} />
+        )}
+      </TouchableOpacity>
+      {open ? (
+        <View style={[styles.productDropdown, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.productDropdownSearch, { borderBottomColor: colors.borderLight }]}>
+            <Search size={14} color={colors.textTertiary} />
+            <TextInput
+              style={[styles.productDropdownSearchInput, { color: colors.text }]}
+              placeholder="Rechercher..."
+              placeholderTextColor={colors.textTertiary}
+              value={search}
+              onChangeText={setSearch}
+              autoFocus
+            />
+            {search.length > 0 ? (
+              <TouchableOpacity onPress={() => setSearch('')} hitSlop={8}>
+                <X size={12} color={colors.textTertiary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {onCreateSupplier ? (
+            <TouchableOpacity
+              style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight, backgroundColor: colors.primaryLight }]}
+              onPress={() => { setOpen(false); onCreateSupplier(); }}
+              activeOpacity={0.7}
+            >
+              <Plus size={14} color={colors.primary} />
+              <Text style={[styles.productDropdownName, { color: colors.primary, fontWeight: '600' as const }]}>Ajouter un fournisseur</Text>
+            </TouchableOpacity>
+          ) : null}
+          <ScrollView style={styles.productDropdownList} nestedScrollEnabled>
+            {filtered.map((s) => (
+              <TouchableOpacity
+                key={s.id}
+                style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight }, selectedId === s.id && { backgroundColor: colors.primaryLight }]}
+                onPress={() => { onSelect(s.id); setOpen(false); setSearch(''); }}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.productDropdownName, { color: colors.text }]}>{s.companyName}</Text>
+                  <Text style={[styles.productDropdownSku, { color: colors.textTertiary }]}>{s.email || s.phone || 'Pas de contact'}</Text>
+                </View>
+                {selectedId === s.id ? <Check size={14} color={colors.primary} /> : null}
+              </TouchableOpacity>
+            ))}
+            {filtered.length === 0 ? (
+              <Text style={[styles.productDropdownEmpty, { color: colors.textTertiary }]}>Aucun fournisseur trouvé</Text>
+            ) : null}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function CommandesSection({ isMobile }: { isMobile: boolean }) {
   const { colors } = useTheme();
-  const { activePurchaseOrders, activeSuppliers, activeProducts, receivePurchaseOrder, convertPOToSupplierInvoice, createPurchaseOrder, updatePurchaseOrder, createProduct, activeSupplierInvoices, duplicatePurchaseOrder, company: cmdCompany, showToast } = useData();
+  const { activePurchaseOrders, activeSuppliers, activeProducts, receivePurchaseOrder, convertPOToSupplierInvoice, createPurchaseOrder, updatePurchaseOrder, createProduct, createSupplier: cmdCreateSupplier, activeSupplierInvoices, duplicatePurchaseOrder, company: cmdCompany, showToast, variants, productCategories, customVatRates } = useData();
   const [refusePoId, setRefusePoId] = useState<string | null>(null);
   const [refuseComment, setRefuseComment] = useState('');
   const cur = cmdCompany.currency || 'EUR';
+  const [quickSupplierVisible, setQuickSupplierVisible] = useState(false);
+  const [qsName, setQsName] = useState('');
+  const [qsEmail, setQsEmail] = useState('');
+  const [qsPhone, setQsPhone] = useState('');
+  const [qsError, setQsError] = useState('');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'date' | 'amount' | 'status' | 'supplier'>('date');
@@ -627,6 +770,13 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
   const [quickProductSalePrice, setQuickProductSalePrice] = useState('');
   const [quickProductError, setQuickProductError] = useState('');
   const [quickProductTargetIdx, setQuickProductTargetIdx] = useState<number | null>(null);
+  const [quickProductType, setQuickProductType] = useState<string>('matiere_premiere');
+  const [quickProductCategory, setQuickProductCategory] = useState<string>('');
+  const [quickProductVatRate, setQuickProductVatRate] = useState<string>('20');
+  const [showQuickTypeDropdown, setShowQuickTypeDropdown] = useState(false);
+  const [showQuickCategoryDropdown, setShowQuickCategoryDropdown] = useState(false);
+  const [showQuickVatDropdown, setShowQuickVatDropdown] = useState(false);
+  const [expandedLineProductId, setExpandedLineProductId] = useState<Record<number, string | null>>({});
 
   const filtered = useMemo(() => {
     let list = activePurchaseOrders;
@@ -659,15 +809,21 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
     return prods.filter((p) => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)).slice(0, 30);
   }, [activeProducts, lineSearches]);
 
+  const getProductVariantsForLine = useCallback((productId: string) => {
+    if (!variants) return [];
+    return variants.filter((v: import('@/types').ProductVariant) => v.productId === productId && v.isActive);
+  }, [variants]);
+
   const openCreate = useCallback(() => {
     setFormSupplierId(activeSuppliers.length > 0 ? activeSuppliers[0].id : '');
     setFormDate(new Date().toISOString().split('T')[0]);
     setFormExpectedDate('');
     setFormNotes('');
-    setFormItems([]);
+    setFormItems([{ productId: '', productName: '', quantity: '1', unitPrice: '0', taxRate: '20' }]);
     setFormError('');
     setLineSearches({});
     setLineDropdownOpen(null);
+    setExpandedLineProductId({});
     setFormVisible(true);
   }, [activeSuppliers]);
 
@@ -676,6 +832,11 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
     setQuickProductPrice('');
     setQuickProductSalePrice('');
     setQuickProductError('');
+    setQuickProductType('matiere_premiere');
+    setQuickProductCategory('');
+    setQuickProductVatRate('20');
+    setShowQuickTypeDropdown(false);
+    setShowQuickCategoryDropdown(false);
     setQuickProductTargetIdx(targetIdx);
     setQuickProductVisible(true);
   }, []);
@@ -697,7 +858,8 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
         const product = activeProducts.find((p) => p.id === value);
         if (product) {
           updated.productName = product.name;
-          updated.unitPrice = String(product.purchasePrice);
+          const priceTTC = product.purchasePrice * (1 + product.vatRate / 100);
+          updated.unitPrice = String(Math.round(priceTTC * 100) / 100);
           updated.taxRate = String(product.vatRate);
         }
       }
@@ -705,23 +867,44 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
     }));
   }, [activeProducts]);
 
+  const selectVariantForLine = useCallback((idx: number, product: import('@/types').Product, variant: import('@/types').ProductVariant) => {
+    const variantLabel = Object.values(variant.attributes).join(' / ');
+    const priceTTC = variant.purchasePrice * (1 + product.vatRate / 100);
+    setFormItems((prev) => prev.map((item, i) => {
+      if (i !== idx) return item;
+      return {
+        ...item,
+        productId: product.id,
+        productName: `${product.name} - ${variantLabel}`,
+        unitPrice: String(Math.round(priceTTC * 100) / 100),
+        taxRate: String(product.vatRate),
+      };
+    }));
+    setLineDropdownOpen(null);
+    setLineSearches((prev) => ({ ...prev, [idx]: '' }));
+    setExpandedLineProductId((prev) => ({ ...prev, [idx]: null }));
+  }, []);
+
   const handleQuickProductSubmit = useCallback(() => {
     if (!quickProductName.trim()) { setQuickProductError('Le nom est requis'); return; }
-    const purchasePrice = parseFloat(quickProductPrice) || 0;
+    const vatRate = parseFloat(quickProductVatRate) || 20;
+    const priceTTC = parseFloat(quickProductPrice) || 0;
+    const purchasePrice = priceTTC / (1 + vatRate / 100);
     const salePrice = parseFloat(quickProductSalePrice) || purchasePrice;
-    if (salePrice <= 0) { setQuickProductError('Le prix de vente doit être positif'); return; }
+    if (priceTTC <= 0) { setQuickProductError('Le prix d\'achat TTC doit être positif'); return; }
     const result = createProduct({
       name: quickProductName.trim(),
       description: '',
       sku: '',
-      purchasePrice,
-      salePrice,
-      vatRate: 20,
+      purchasePrice: Math.round(purchasePrice * 100) / 100,
+      salePrice: Math.round(salePrice * 100) / 100,
+      vatRate: vatRate as import('@/types').VATRate,
       stockQuantity: 0,
       lowStockThreshold: 0,
       unit: 'pièce',
-      type: 'matiere_premiere' as const,
+      type: (quickProductType || 'matiere_premiere') as import('@/types').ProductType,
       isActive: true,
+      categoryName: quickProductCategory || undefined,
     });
     if (!result.success) { setQuickProductError(result.error || 'Erreur'); return; }
     setQuickProductVisible(false);
@@ -731,21 +914,27 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
         updateFormItem(quickProductTargetIdx, 'productId', newProd.id);
       }
     }, 100);
-  }, [quickProductName, quickProductPrice, quickProductSalePrice, quickProductTargetIdx, createProduct, activeProducts, updateFormItem]);
+  }, [quickProductName, quickProductPrice, quickProductSalePrice, quickProductTargetIdx, quickProductType, quickProductCategory, quickProductVatRate, createProduct, activeProducts, updateFormItem]);
 
   const handleSubmitPO = useCallback(() => {
     if (!formSupplierId) { setFormError('Sélectionnez un fournisseur'); return; }
     if (formItems.length === 0) { setFormError('Ajoutez au moins une ligne'); return; }
-    const items = formItems.map((fi, idx) => ({
-      id: `poi_${Date.now()}_${idx}`,
-      purchaseOrderId: '',
-      productId: fi.productId,
-      productName: fi.productName || 'Produit',
-      quantity: parseInt(fi.quantity, 10) || 1,
-      unitPrice: parseFloat(fi.unitPrice) || 0,
-      taxRate: (parseFloat(fi.taxRate) || 20) as import('@/types').VATRate,
-      total: (parseInt(fi.quantity, 10) || 1) * (parseFloat(fi.unitPrice) || 0),
-    }));
+    const items = formItems.map((fi, idx) => {
+      const qty = parseInt(fi.quantity, 10) || 1;
+      const priceTTC = parseFloat(fi.unitPrice) || 0;
+      const vatRate = parseFloat(fi.taxRate) || 20;
+      const priceHT = priceTTC / (1 + vatRate / 100);
+      return {
+        id: `poi_${Date.now()}_${idx}`,
+        purchaseOrderId: '',
+        productId: fi.productId,
+        productName: fi.productName || 'Produit',
+        quantity: qty,
+        unitPrice: Math.round(priceHT * 100) / 100,
+        taxRate: vatRate as import('@/types').VATRate,
+        total: qty * priceTTC,
+      };
+    });
     const result = createPurchaseOrder(formSupplierId, items, formNotes, formExpectedDate || undefined);
     if (!result.success) { setFormError(result.error || 'Erreur'); return; }
     setFormVisible(false);
@@ -993,17 +1182,19 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
 
         <View style={styles.formFieldGroup}>
           <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Fournisseur *</Text>
-          <View style={styles.selectRow}>
-            {activeSuppliers.map((s) => (
-              <TouchableOpacity
-                key={s.id}
-                style={[styles.selectChip, { backgroundColor: formSupplierId === s.id ? colors.primary : colors.inputBg, borderColor: formSupplierId === s.id ? colors.primary : colors.inputBorder }]}
-                onPress={() => setFormSupplierId(s.id)}
-              >
-                <Text style={[styles.selectChipText, { color: formSupplierId === s.id ? '#FFF' : colors.text }]}>{s.companyName}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <SupplierDropdown
+            suppliers={activeSuppliers}
+            selectedId={formSupplierId}
+            onSelect={setFormSupplierId}
+            colors={colors}
+            onCreateSupplier={() => {
+              setQsName('');
+              setQsEmail('');
+              setQsPhone('');
+              setQsError('');
+              setQuickSupplierVisible(true);
+            }}
+          />
         </View>
 
         <View style={styles.formRow}>
@@ -1066,23 +1257,53 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
                           )}
                         </View>
                         <ScrollView style={styles.productDropdownList} nestedScrollEnabled>
-                          {lineProducts.map((p) => (
-                            <TouchableOpacity
-                              key={p.id}
-                              style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight }, item.productId === p.id && { backgroundColor: colors.primaryLight }]}
-                              onPress={() => {
-                                updateFormItem(idx, 'productId', p.id);
-                                setLineDropdownOpen(null);
-                                setLineSearches((prev) => ({ ...prev, [idx]: '' }));
-                              }}
-                            >
-                              <View style={{ flex: 1 }}>
-                                <Text style={[styles.productDropdownName, { color: colors.text }]}>{p.name}</Text>
-                                <Text style={[styles.productDropdownSku, { color: colors.textTertiary }]}>{p.sku || 'Sans réf.'} · Achat: {formatCurrency(p.purchasePrice, cur)}</Text>
+                          {lineProducts.map((p) => {
+                            const pVariants = getProductVariantsForLine(p.id);
+                            const isExpanded = expandedLineProductId[idx] === p.id;
+                            return (
+                              <View key={p.id}>
+                                <TouchableOpacity
+                                  style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight }, item.productId === p.id && { backgroundColor: colors.primaryLight }]}
+                                  onPress={() => {
+                                    if (pVariants.length > 0) {
+                                      setExpandedLineProductId((prev) => ({ ...prev, [idx]: isExpanded ? null : p.id }));
+                                    } else {
+                                      updateFormItem(idx, 'productId', p.id);
+                                      setLineDropdownOpen(null);
+                                      setLineSearches((prev) => ({ ...prev, [idx]: '' }));
+                                    }
+                                  }}
+                                >
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.productDropdownName, { color: colors.text }]}>{p.name}</Text>
+                                    <Text style={[styles.productDropdownSku, { color: colors.textTertiary }]}>{p.sku || 'Sans réf.'} · Achat TTC: {formatCurrency(p.purchasePrice * (1 + p.vatRate / 100), cur)}{pVariants.length > 0 ? ` · ${pVariants.length} variante(s)` : ''}</Text>
+                                  </View>
+                                  {pVariants.length > 0 ? (
+                                    isExpanded ? <ChevronUp size={14} color={colors.textTertiary} /> : <ChevronDown size={14} color={colors.textTertiary} />
+                                  ) : (
+                                    item.productId === p.id ? <Check size={14} color={colors.primary} /> : null
+                                  )}
+                                </TouchableOpacity>
+                                {isExpanded && pVariants.map((v) => {
+                                  const vLabel = Object.values(v.attributes).join(' / ');
+                                  const isSelected = item.productName.includes(vLabel);
+                                  return (
+                                    <TouchableOpacity
+                                      key={v.id}
+                                      style={[styles.productDropdownItem, { borderBottomColor: colors.borderLight, paddingLeft: 28, backgroundColor: isSelected ? colors.primaryLight : undefined }]}
+                                      onPress={() => selectVariantForLine(idx, p, v)}
+                                    >
+                                      <View style={{ flex: 1 }}>
+                                        <Text style={[styles.productDropdownName, { color: colors.text, fontSize: 12 }]}>{vLabel}</Text>
+                                        <Text style={[styles.productDropdownSku, { color: colors.textTertiary }]}>{v.sku || 'Sans réf.'} · Achat TTC: {formatCurrency(v.purchasePrice * (1 + (activeProducts.find(pp => pp.id === p.id)?.vatRate || 20) / 100), cur)} · Stock: {v.stockQuantity}</Text>
+                                      </View>
+                                      {isSelected ? <Check size={14} color={colors.primary} /> : null}
+                                    </TouchableOpacity>
+                                  );
+                                })}
                               </View>
-                              {item.productId === p.id && <Check size={14} color={colors.primary} />}
-                            </TouchableOpacity>
-                          ))}
+                            );
+                          })}
                           {lineProducts.length === 0 && (
                             <Text style={[styles.productDropdownEmpty, { color: colors.textTertiary }]}>Aucun produit trouvé</Text>
                           )}
@@ -1105,13 +1326,18 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
                     />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.lineItemLabel, { color: colors.textTertiary }]}>Prix unit. HT</Text>
+                    <Text style={[styles.lineItemLabel, { color: colors.textTertiary }]}>Prix unit. TTC</Text>
                     <TextInput
                       style={[styles.lineInput, { color: colors.text, borderColor: colors.inputBorder }]}
                       value={item.unitPrice}
                       onChangeText={(v) => updateFormItem(idx, 'unitPrice', v)}
                       keyboardType="decimal-pad"
                     />
+                    {(parseFloat(item.unitPrice) || 0) > 0 ? (
+                      <Text style={{ fontSize: 10, color: colors.textTertiary, marginTop: 2 }}>
+                        HT: {formatCurrency((parseFloat(item.unitPrice) || 0) / (1 + (parseFloat(item.taxRate) || 20) / 100), cur)}
+                      </Text>
+                    ) : null}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.lineItemLabel, { color: colors.textTertiary }]}>TVA %</Text>
@@ -1126,14 +1352,29 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
               </View>
             );
           })}
-          {formItems.length > 0 && (
-            <View style={[styles.poTotalRow, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
-              <Text style={[styles.poTotalLabel, { color: colors.textSecondary }]}>Total estimé HT</Text>
-              <Text style={[styles.poTotalValue, { color: colors.text }]}>
-                {formatCurrency(formItems.reduce((s, fi) => s + (parseInt(fi.quantity, 10) || 0) * (parseFloat(fi.unitPrice) || 0), 0))}
-              </Text>
-            </View>
-          )}
+          {formItems.length > 0 && (() => {
+            const totalTTC = formItems.reduce((s, fi) => s + (parseInt(fi.quantity, 10) || 0) * (parseFloat(fi.unitPrice) || 0), 0);
+            const totalHT = formItems.reduce((s, fi) => {
+              const qty = parseInt(fi.quantity, 10) || 0;
+              const priceTTC = parseFloat(fi.unitPrice) || 0;
+              const vatRate = parseFloat(fi.taxRate) || 20;
+              return s + qty * (priceTTC / (1 + vatRate / 100));
+            }, 0);
+            return (
+              <View style={[styles.poTotalRow, { backgroundColor: colors.card, borderColor: colors.cardBorder }]}>
+                <View style={{ gap: 2 }}>
+                  <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const }}>
+                    <Text style={[styles.poTotalLabel, { color: colors.textSecondary }]}>Total estimé HT</Text>
+                    <Text style={[styles.poTotalValue, { color: colors.textSecondary }]}>{formatCurrency(totalHT, cur)}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const }}>
+                    <Text style={[styles.poTotalLabel, { color: colors.text, fontWeight: '700' as const }]}>Total estimé TTC</Text>
+                    <Text style={[styles.poTotalValue, { color: colors.text, fontWeight: '700' as const }]}>{formatCurrency(totalTTC, cur)}</Text>
+                  </View>
+                </View>
+              </View>
+            );
+          })()}
         </View>
 
         <FormField label="Notes" value={formNotes} onChangeText={setFormNotes} placeholder="Notes..." multiline numberOfLines={2} />
@@ -1153,9 +1394,59 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
           </View>
         ) : null}
         <FormField label="Nom du produit" value={quickProductName} onChangeText={setQuickProductName} placeholder="Nom" required />
+        <View style={styles.formFieldGroup}>
+          <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Type de produit</Text>
+          <QuickDropdown
+            options={[
+              { value: 'matiere_premiere', label: 'Matière première' },
+              { value: 'consommable', label: 'Consommable' },
+              { value: 'produit_revendu', label: 'Produit revendu' },
+              { value: 'produit_fini', label: 'Produit fini' },
+              { value: 'service', label: 'Service' },
+            ]}
+            selectedValue={quickProductType}
+            onSelect={(v) => { setQuickProductType(v); setShowQuickTypeDropdown(false); }}
+            isOpen={showQuickTypeDropdown}
+            onToggle={() => { setShowQuickTypeDropdown(!showQuickTypeDropdown); setShowQuickCategoryDropdown(false); setShowQuickVatDropdown(false); }}
+            colors={colors}
+            placeholder="Sélectionner un type..."
+          />
+        </View>
+        <View style={styles.formFieldGroup}>
+          <Text style={[styles.formLabel, { color: colors.textSecondary }]}>Catégorie</Text>
+          <QuickDropdown
+            options={productCategories.map(c => ({ value: c, label: c }))}
+            selectedValue={quickProductCategory}
+            onSelect={(v) => { setQuickProductCategory(v); setShowQuickCategoryDropdown(false); }}
+            isOpen={showQuickCategoryDropdown}
+            onToggle={() => { setShowQuickCategoryDropdown(!showQuickCategoryDropdown); setShowQuickTypeDropdown(false); setShowQuickVatDropdown(false); }}
+            colors={colors}
+            placeholder="Sélectionner une catégorie..."
+            allowCustom
+            customValue={quickProductCategory}
+            onCustomChange={setQuickProductCategory}
+          />
+        </View>
+        <View style={styles.formFieldGroup}>
+          <Text style={[styles.formLabel, { color: colors.textSecondary }]}>TVA (%)</Text>
+          <QuickDropdown
+            options={customVatRates.map(r => ({ value: r, label: `${r}%` }))}
+            selectedValue={quickProductVatRate}
+            onSelect={(v) => { setQuickProductVatRate(v); setShowQuickVatDropdown(false); }}
+            isOpen={showQuickVatDropdown}
+            onToggle={() => { setShowQuickVatDropdown(!showQuickVatDropdown); setShowQuickTypeDropdown(false); setShowQuickCategoryDropdown(false); }}
+            colors={colors}
+            placeholder="Sélectionner la TVA..."
+          />
+        </View>
         <View style={styles.formRow}>
           <View style={styles.formCol}>
-            <FormField label="Prix d'achat HT" value={quickProductPrice} onChangeText={setQuickProductPrice} placeholder="0.00" keyboardType="decimal-pad" />
+            <FormField label="Prix d'achat TTC" value={quickProductPrice} onChangeText={setQuickProductPrice} placeholder="0.00" keyboardType="decimal-pad" />
+            {quickProductPrice ? (
+              <Text style={{ fontSize: 11, color: colors.textTertiary, marginTop: 2 }}>
+                HT: {formatCurrency((parseFloat(quickProductPrice) || 0) / (1 + (parseFloat(quickProductVatRate) || 20) / 100), cur)}
+              </Text>
+            ) : null}
           </View>
           <View style={styles.formCol}>
             <FormField label="Prix de vente HT" value={quickProductSalePrice} onChangeText={setQuickProductSalePrice} placeholder="0.00" keyboardType="decimal-pad" required />
@@ -1189,15 +1480,53 @@ function CommandesSection({ isMobile }: { isMobile: boolean }) {
           required
         />
       </FormModal>
+
+      <FormModal
+        visible={quickSupplierVisible}
+        onClose={() => setQuickSupplierVisible(false)}
+        title="Ajout rapide fournisseur"
+        subtitle="Le fournisseur sera automatiquement sélectionné"
+        onSubmit={() => {
+          if (!qsName.trim()) { setQsError('Le nom est requis'); return; }
+          const result = cmdCreateSupplier({
+            companyName: qsName.trim(),
+            email: qsEmail.trim(),
+            phone: qsPhone.trim(),
+            address: '',
+            city: '',
+            postalCode: '',
+            country: 'France',
+            notes: '',
+            paymentConditions: '',
+          });
+          if (!result.success) { setQsError(result.error || 'Erreur'); return; }
+          setQuickSupplierVisible(false);
+          setTimeout(() => {
+            const found = activeSuppliers.find(s => s.companyName === qsName.trim());
+            if (found) setFormSupplierId(found.id);
+          }, 100);
+        }}
+        submitLabel="Créer et sélectionner"
+      >
+        {qsError ? (
+          <View style={[styles.errorBanner, { backgroundColor: colors.dangerLight }]}>
+            <Text style={[styles.errorText, { color: colors.danger }]}>{qsError}</Text>
+          </View>
+        ) : null}
+        <FormField label="Nom de l'entreprise" value={qsName} onChangeText={setQsName} placeholder="Nom du fournisseur" required />
+        <FormField label="Email" value={qsEmail} onChangeText={setQsEmail} placeholder="email@example.com" keyboardType="email-address" />
+        <FormField label="Téléphone" value={qsPhone} onChangeText={setQsPhone} placeholder="+33 6 12 34 56 78" keyboardType="phone-pad" />
+      </FormModal>
     </>
   );
 }
 
 function FacturesRecuesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
   const { colors } = useTheme();
+  const router = useRouter();
   const {
     activeSupplierInvoices, activeSuppliers, activePurchaseOrders,
-    markSupplierInvoicePaid, createSupplierInvoice, updateSupplierInvoice, createSupplier, showToast, company: factCompany,
+    markSupplierInvoicePaid: _markSupplierInvoicePaid, createSupplierInvoice, updateSupplierInvoice, createSupplier, showToast, company: factCompany,
   } = useData();
   const [expandedSiId, setExpandedSiId] = useState<string | null>(null);
   const cur = factCompany.currency || 'EUR';
@@ -1622,9 +1951,9 @@ function FacturesRecuesSection({ isMobile: _isMobile }: { isMobile: boolean }) {
                         </TouchableOpacity>
                       )}
                       {(si.status === 'received' || si.status === 'to_pay' || si.status === 'late') && (
-                        <TouchableOpacity onPress={() => { markSupplierInvoicePaid(si.id); setExpandedSiId(null); }} style={[styles.detailActionBtn, { backgroundColor: colors.success }]}>
-                          <Check size={13} color="#FFF" />
-                          <Text style={[styles.detailActionBtnText, { color: '#FFF' }]}>Marquer payée</Text>
+                        <TouchableOpacity onPress={() => { router.push(`/cashflow?action=pay&supplierInvoiceId=${si.id}&amount=${si.total}&supplier=${encodeURIComponent(si.supplierName || getSupplierName(si.supplierId))}` as never); }} style={[styles.detailActionBtn, { backgroundColor: colors.success }]}>
+                          <CreditCard size={13} color="#FFF" />
+                          <Text style={[styles.detailActionBtnText, { color: '#FFF' }]}>Payer</Text>
                         </TouchableOpacity>
                       )}
                     </View>

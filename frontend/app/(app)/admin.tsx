@@ -14,7 +14,7 @@ import { getActionLabel, getEntityLabel } from '@/services/auditService';
 import PageHeader from '@/components/PageHeader';
 import FormModal from '@/components/FormModal';
 import FormField from '@/components/FormField';
-import { SelectField } from '@/components/FormField';
+import DropdownPicker from '@/components/DropdownPicker';
 import type { AuditEntityType, UserRole } from '@/types';
 import { useI18n } from '@/contexts/I18nContext';
 import { useConfirm } from '@/contexts/ConfirmContext';
@@ -764,7 +764,7 @@ export default function AdminScreen() {
           error={inviteErrors.email}
           testID="invite-email"
         />
-        <SelectField
+        <DropdownPicker
           label="Rôle"
           value={inviteForm.role}
           options={[
